@@ -1,0 +1,31 @@
+# The entire ATLAS toolchain runs under bash (Git Bash on Windows), so text files
+# are LF in the working tree as well as in the index. Without this, core.autocrlf=true
+# hands a fresh clone CRLF shell scripts and bash fails with "$'\r': command not found".
+* text=auto eol=lf
+
+*.sh     text eol=lf
+*.py     text eol=lf
+*.toml   text eol=lf
+*.md     text eol=lf
+*.json   text eol=lf
+*.yaml   text eol=lf
+*.yml    text eol=lf
+*.bicep  text eol=lf
+*.xml    text eol=lf
+*.jsonl  text eol=lf
+Makefile text eol=lf
+
+# Windows-native entry points keep CRLF.
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Never normalise binaries.
+*.png binary
+*.jpg binary
+*.gif binary
+*.zip binary
+*.cast binary
+
+# uv.lock is generated; keep diffs collapsed in review.
+uv.lock linguist-generated=true
