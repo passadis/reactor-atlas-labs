@@ -21,6 +21,9 @@ param abbrs object
 @description('Max autoscale throughput shared across the ATLAS database.')
 param cosmosAutoscaleMaxThroughput int = 4000
 
+@description('Region for Azure AI Search. Separate from `location` because eastus2 ran out of AI Search capacity for every SKU. See CLAUDE.md section 7.14.')
+param searchLocation string = location
+
 var cosmosAccountName = '${abbrs.documentDbDatabaseAccount}-atlas-${resourceToken}'
 var searchServiceName = '${abbrs.searchSearchService}-atlas-${resourceToken}'
 // Storage account names: no hyphens, max 24 chars, lowercase.
@@ -120,7 +123,7 @@ resource cosmosContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
 
 resource search 'Microsoft.Search/searchServices@2025-05-01' = {
   name: searchServiceName
-  location: location
+  location: searchLocation
   tags: tags
   sku: {
     name: 'standard'
@@ -234,6 +237,7 @@ output cosmosContainerNames array = [for (c, i) in containers: c.name]
 output searchServiceName string = search.name
 output searchServiceId string = search.id
 output searchServiceEndpoint string = 'https://${search.name}.search.windows.net'
+output searchServiceLocation string = search.location
 output searchPrincipalId string = search.identity.principalId
 
 output storageAccountName string = storage.name

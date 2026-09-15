@@ -23,6 +23,15 @@ param environmentName string
 ])
 param location string = 'eastus2'
 
+@description('Region for Azure AI Search. Defaults to eastus because eastus2 is currently out of AI Search capacity for every SKU. CLAUDE.md section 7.14.')
+@allowed([
+  'eastus'
+  'eastus2'
+  'centralus'
+  'swedencentral'
+])
+param searchLocation string = 'eastus'
+
 @description('Object id of the principal running the deployment. azd supplies AZURE_PRINCIPAL_ID. Gets data-plane roles so you can seed and debug locally.')
 param principalId string = ''
 
@@ -131,6 +140,7 @@ module data './modules/data.bicep' = {
     tags: tags
     resourceToken: resourceToken
     abbrs: abbrs
+    searchLocation: searchLocation
   }
 }
 
@@ -148,6 +158,7 @@ module foundry './modules/foundry.bicep' = {
     appInsightsName: observability.outputs.appInsightsName
     searchServiceId: data.outputs.searchServiceId
     searchServiceEndpoint: data.outputs.searchServiceEndpoint
+    searchServiceLocation: data.outputs.searchServiceLocation
     gptMainModelName: gptMainModelName
     gptMainModelVersion: gptMainModelVersion
     gptMainCapacity: gptMainCapacity
@@ -312,11 +323,9 @@ output ATLAS_WORKER_IDENTITY_CLIENT_ID string = identity.outputs.workerClientId
 output ATLAS_FUNC_IDENTITY_CLIENT_ID string = identity.outputs.funcClientId
 output ATLAS_LOGIC_IDENTITY_CLIENT_ID string = identity.outputs.logicClientId
 
-output ATLAS_WEB_IDENTITY_PRINCIPAL_ID string = identity.outputs.webPrincipalId
-output ATLAS_ORCHESTRATOR_IDENTITY_PRINCIPAL_ID string = identity.outputs.orchestratorPrincipalId
-output ATLAS_WORKER_IDENTITY_PRINCIPAL_ID string = identity.outputs.workerPrincipalId
-output ATLAS_FUNC_IDENTITY_PRINCIPAL_ID string = identity.outputs.funcPrincipalId
-output ATLAS_LOGIC_IDENTITY_PRINCIPAL_ID string = identity.outputs.logicPrincipalId
+// Principal ids are deliberately NOT emitted: they are consumed inside the template by
+// rbac.bicep, nothing downstream needs them, and Bicep caps a deployment at 64 outputs.
+// Recover one with: az identity show -n <name> -g <rg> --query principalId -o tsv
 
 output ATLAS_LOG_ANALYTICS_ID string = observability.outputs.logAnalyticsId
 output ATLAS_APPINSIGHTS_NAME string = observability.outputs.appInsightsName
@@ -331,6 +340,7 @@ output ATLAS_COSMOS_ENDPOINT string = data.outputs.cosmosEndpoint
 output ATLAS_COSMOS_DATABASE string = data.outputs.cosmosDatabaseName
 output ATLAS_SEARCH_SERVICE_NAME string = data.outputs.searchServiceName
 output ATLAS_SEARCH_ENDPOINT string = data.outputs.searchServiceEndpoint
+output ATLAS_SEARCH_LOCATION string = data.outputs.searchServiceLocation
 output ATLAS_STORAGE_ACCOUNT_NAME string = data.outputs.storageAccountName
 output ATLAS_STORAGE_BLOB_ENDPOINT string = data.outputs.storageBlobEndpoint
 

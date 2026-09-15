@@ -33,6 +33,9 @@ param searchServiceId string
 @description('Endpoint of the Azure AI Search service.')
 param searchServiceEndpoint string
 
+@description('Region of the Azure AI Search service. May differ from the account region.')
+param searchServiceLocation string = location
+
 // -- model parameters ------------------------------------------------------------------------
 param gptMainModelName string
 param gptMainModelVersion string
@@ -224,7 +227,7 @@ resource projectSearchConnection 'Microsoft.CognitiveServices/accounts/projects/
     metadata: {
       ApiType: 'Azure'
       ResourceId: searchServiceId
-      location: location
+      location: searchServiceLocation
     }
   }
   dependsOn: [projectAppInsightsConnection]
