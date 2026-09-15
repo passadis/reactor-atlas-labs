@@ -179,7 +179,12 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01'
 var blobContainers = [
   'eval-artifacts'
   'demo-assets'
+  // Instruction versions live here and in Cosmos, never baked into a container image, so the
+  // v0/v1 switch is a data read rather than a redeploy. CLAUDE.md section 9.1.
   'agent-instructions'
+  // Flex Consumption deployment packages, one container per function app.
+  'func-api-packages'
+  'func-mcp-packages'
 ]
 
 resource storageContainers 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = [
@@ -191,6 +196,32 @@ resource storageContainers 'Microsoft.Storage/storageAccounts/blobServices/conta
     }
   }
 ]
+
+// ---------------------------------------------------------------------------- key vault --
+
+// RBAC mode, not access policies. Holds exactly one secret in the finished system: the APIM
+// subscription key (CLAUDE.md section 1). The approval-token signing key joins it in Phase 10.
+resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+  name: take('${abbrs.keyVaultVault}-atlas-${resourceToken}', 24)
+  location: location
+  tags: tags
+  properties: {
+    sku: {
+      family: 'A'
+      name: 'standard'
+    }
+    tenantId: subscription().tenantId
+    enableRbacAuthorization: true
+    enableSoftDelete: true
+    softDeleteRetentionInDays: 7
+    enablePurgeProtection: null
+    publicNetworkAccess: 'Enabled'
+    networkAcls: {
+      defaultAction: 'Allow'
+      bypass: 'AzureServices'
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------- outputs --
 
@@ -209,3 +240,10 @@ output storageAccountName string = storage.name
 output storageAccountId string = storage.id
 output storageBlobEndpoint string = storage.properties.primaryEndpoints.blob
 output storageQueueEndpoint string = storage.properties.primaryEndpoints.queue
+
+output funcApiPackageContainer string = 'func-api-packages'
+output funcMcpPackageContainer string = 'func-mcp-packages'
+
+output keyVaultName string = keyVault.name
+output keyVaultId string = keyVault.id
+output keyVaultUri string = keyVault.properties.vaultUri

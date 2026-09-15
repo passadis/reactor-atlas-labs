@@ -160,6 +160,139 @@ module foundry './modules/foundry.bicep' = {
   }
 }
 
+// Service Bus Premium: the asynchronous remediation path.
+module messaging './modules/messaging.bicep' = {
+  name: 'messaging'
+  scope: rg
+  params: {
+    location: location
+    tags: tags
+    resourceToken: resourceToken
+    abbrs: abbrs
+  }
+}
+
+// ACR, the Container Apps environment with a Dedicated D4 profile, and the three apps.
+// Apps deploy with a placeholder image; azd deploy replaces it.
+module computeAca './modules/compute-aca.bicep' = {
+  name: 'compute-aca'
+  scope: rg
+  params: {
+    location: location
+    tags: tags
+    resourceToken: resourceToken
+    abbrs: abbrs
+    logAnalyticsId: observability.outputs.logAnalyticsId
+    appInsightsConnectionString: observability.outputs.appInsightsConnectionString
+    webIdentityId: identity.outputs.webId
+    webIdentityClientId: identity.outputs.webClientId
+    orchestratorIdentityId: identity.outputs.orchestratorId
+    orchestratorIdentityClientId: identity.outputs.orchestratorClientId
+    workerIdentityId: identity.outputs.workerId
+    workerIdentityClientId: identity.outputs.workerClientId
+    cosmosEndpoint: data.outputs.cosmosEndpoint
+    cosmosDatabaseName: data.outputs.cosmosDatabaseName
+    searchEndpoint: data.outputs.searchServiceEndpoint
+    foundryProjectEndpoint: foundry.outputs.projectEndpoint
+    foundryModelDeployment: foundry.outputs.gptMainDeploymentName
+    serviceBusFqdn: messaging.outputs.namespaceFqdn
+    serviceBusNamespaceName: messaging.outputs.namespaceName
+    commandsQueueName: messaging.outputs.commandsQueueName
+    storageBlobEndpoint: data.outputs.storageBlobEndpoint
+  }
+}
+
+// Two Flex Consumption function apps on one FC1 plan, Python 3.13, identity-based storage.
+module computeFunctions './modules/compute-functions.bicep' = {
+  name: 'compute-functions'
+  scope: rg
+  params: {
+    location: location
+    tags: tags
+    resourceToken: resourceToken
+    abbrs: abbrs
+    funcIdentityId: identity.outputs.funcId
+    funcIdentityClientId: identity.outputs.funcClientId
+    storageAccountName: data.outputs.storageAccountName
+    storageBlobEndpoint: data.outputs.storageBlobEndpoint
+    apiPackageContainer: data.outputs.funcApiPackageContainer
+    mcpPackageContainer: data.outputs.funcMcpPackageContainer
+    appInsightsConnectionString: observability.outputs.appInsightsConnectionString
+    cosmosEndpoint: data.outputs.cosmosEndpoint
+    cosmosDatabaseName: data.outputs.cosmosDatabaseName
+    searchEndpoint: data.outputs.searchServiceEndpoint
+    serviceBusFqdn: messaging.outputs.namespaceFqdn
+    commandsQueueName: messaging.outputs.commandsQueueName
+  }
+}
+
+// APIM StandardV2. The slowest resource in the footprint (15-45 min), so it starts as early as
+// its dependencies allow. APIs, MCP servers and policy XML land in Phase 09.
+module apim './modules/apim.bicep' = {
+  name: 'apim'
+  scope: rg
+  params: {
+    location: location
+    tags: tags
+    resourceToken: resourceToken
+    abbrs: abbrs
+    publisherEmail: opsEmail
+    appInsightsId: observability.outputs.appInsightsId
+    appInsightsConnectionString: observability.outputs.appInsightsConnectionString
+    opsApiUrl: computeFunctions.outputs.apiAppUrl
+    opsMcpUrl: computeFunctions.outputs.mcpAppUrl
+    foundryAccountEndpoint: foundry.outputs.accountEndpoint
+  }
+}
+
+// Logic Apps Standard on WS1, with its own shared-key storage account (CLAUDE.md 7.9).
+module logicapps './modules/logicapps.bicep' = {
+  name: 'logicapps'
+  scope: rg
+  params: {
+    location: location
+    tags: tags
+    resourceToken: resourceToken
+    abbrs: abbrs
+    logicIdentityId: identity.outputs.logicId
+    logicIdentityClientId: identity.outputs.logicClientId
+    appInsightsConnectionString: observability.outputs.appInsightsConnectionString
+    orchestratorUrl: computeAca.outputs.orchestratorInternalUrl
+  }
+}
+
+// Every assignment in RBAC-MATRIX.md, including the Cosmos DATA-PLANE roles that ARM RBAC does not
+// cover. Runs last: it needs principal ids from every other module.
+module rbac './modules/rbac.bicep' = {
+  name: 'rbac'
+  scope: rg
+  params: {
+    foundryAccountName: foundry.outputs.accountName
+    foundryProjectName: foundry.outputs.projectName
+    foundryProjectPrincipalId: foundry.outputs.projectPrincipalId
+    cosmosAccountName: data.outputs.cosmosAccountName
+    searchServiceName: data.outputs.searchServiceName
+    serviceBusNamespaceName: messaging.outputs.namespaceName
+    commandsQueueName: messaging.outputs.commandsQueueName
+    resultsQueueName: messaging.outputs.resultsQueueName
+    eventsTopicName: messaging.outputs.eventsTopicName
+    storageAccountName: data.outputs.storageAccountName
+    logicStorageAccountName: logicapps.outputs.logicStorageName
+    acrName: computeAca.outputs.acrName
+    keyVaultName: data.outputs.keyVaultName
+    appInsightsName: observability.outputs.appInsightsName
+    logAnalyticsName: observability.outputs.logAnalyticsName
+    apimPrincipalId: apim.outputs.apimPrincipalId
+    webPrincipalId: identity.outputs.webPrincipalId
+    orchestratorPrincipalId: identity.outputs.orchestratorPrincipalId
+    workerPrincipalId: identity.outputs.workerPrincipalId
+    funcPrincipalId: identity.outputs.funcPrincipalId
+    logicPrincipalId: identity.outputs.logicPrincipalId
+    principalId: principalId
+    principalType: principalType
+  }
+}
+
 // ---------------------------------------------------------------------------- outputs --
 
 output AZURE_LOCATION string = location
@@ -211,3 +344,36 @@ output FOUNDRY_MODEL_DEPLOYMENT string = foundry.outputs.gptMainDeploymentName
 output ATLAS_MODEL_JUDGE string = foundry.outputs.gptJudgeDeploymentName
 output ATLAS_MODEL_EMBED string = foundry.outputs.embedDeploymentName
 output ATLAS_RAI_POLICY_NAME string = foundry.outputs.raiPolicyName
+
+output ATLAS_SERVICEBUS_NAMESPACE string = messaging.outputs.namespaceName
+output ATLAS_SERVICEBUS_FQDN string = messaging.outputs.namespaceFqdn
+output ATLAS_COMMANDS_QUEUE string = messaging.outputs.commandsQueueName
+output ATLAS_RESULTS_QUEUE string = messaging.outputs.resultsQueueName
+output ATLAS_EVENTS_TOPIC string = messaging.outputs.eventsTopicName
+
+output AZURE_CONTAINER_REGISTRY_ENDPOINT string = computeAca.outputs.acrLoginServer
+output AZURE_CONTAINER_REGISTRY_NAME string = computeAca.outputs.acrName
+output AZURE_CONTAINER_APPS_ENVIRONMENT_NAME string = computeAca.outputs.environmentName
+output ATLAS_WEB_APP_NAME string = computeAca.outputs.webAppName
+output ATLAS_WEB_URL string = computeAca.outputs.webAppUrl
+output ATLAS_ORCHESTRATOR_APP_NAME string = computeAca.outputs.orchestratorAppName
+output ATLAS_ORCHESTRATOR_URL string = computeAca.outputs.orchestratorInternalUrl
+output ATLAS_WORKER_APP_NAME string = computeAca.outputs.workerAppName
+
+output ATLAS_FUNC_API_NAME string = computeFunctions.outputs.apiAppName
+output ATLAS_FUNC_API_URL string = computeFunctions.outputs.apiAppUrl
+output ATLAS_FUNC_MCP_NAME string = computeFunctions.outputs.mcpAppName
+output ATLAS_FUNC_MCP_URL string = computeFunctions.outputs.mcpAppUrl
+
+output ATLAS_KEYVAULT_NAME string = data.outputs.keyVaultName
+output ATLAS_KEYVAULT_URI string = data.outputs.keyVaultUri
+
+output ATLAS_APIM_NAME string = apim.outputs.apimName
+output ATLAS_APIM_GATEWAY_URL string = apim.outputs.apimGatewayUrl
+output ATLAS_APIM_PRINCIPAL_ID string = apim.outputs.apimPrincipalId
+output ATLAS_APIM_PRODUCT string = apim.outputs.agentToolsProductName
+
+output ATLAS_LOGICAPP_NAME string = logicapps.outputs.logicAppName
+output ATLAS_LOGICAPP_URL string = logicapps.outputs.logicAppUrl
+
+output ATLAS_RBAC_SUMMARY string = rbac.outputs.assignmentSummary
