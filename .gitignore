@@ -1,0 +1,38 @@
+# azd / Azure
+.azure/
+*.env
+.env
+.env.*
+!.env.example
+local.settings.json
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.python-version
+dist/
+build/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Node / tooling
+node_modules/
+
+# Azure Functions
+bin/
+obj/
+.func/
+
+# Local artefacts
+evals/results/
+verification-report.json
+*.log
+.DS_Store
+Thumbs.db

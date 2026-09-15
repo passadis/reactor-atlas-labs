@@ -1,0 +1,107 @@
+[project]
+name = "atlas"
+version = "0.1.0"
+description = "Project ATLAS - Contoso Cloud Operations incident copilot (Microsoft Reactor series)"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "atlas-common",
+    "atlas-agent",
+    "atlas-orchestrator",
+    "atlas-web",
+    "atlas-worker",
+    "atlas-hosted-agent",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["src/*"]
+
+[tool.uv.sources]
+atlas-common = { workspace = true }
+atlas-agent = { workspace = true }
+atlas-orchestrator = { workspace = true }
+atlas-web = { workspace = true }
+atlas-worker = { workspace = true }
+atlas-hosted-agent = { workspace = true }
+
+# Exact pins throughout: the agent stack ships breaking changes roughly weekly.
+# See docs/API-NOTES.md before changing any version here.
+[dependency-groups]
+dev = [
+    "ruff==0.16.7",
+    "mypy==2.3.1",
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "pytest-cov==7.1.0",
+    "types-pyyaml==6.0.12.20260906",
+    "types-requests==2.33.0.20260906",
+    "openapi-spec-validator==0.9.0",
+    "faker==40.39.0",
+    "pyyaml==6.0.3",
+]
+# Phase 12. azure-ai-evaluation carries the AI Red Teaming Agent (eastus2 / northcentralus only).
+evals = [
+    "azure-ai-projects==2.6.1",
+    "azure-ai-evaluation==1.18.5",
+]
+
+# ---------------------------------------------------------------------------
+# ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["_labpack", ".azure", "data/seed"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "ASYNC", "S", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+"**/tests/**" = ["S101"]
+"scripts/**" = ["S603", "S607"]
+
+# ---------------------------------------------------------------------------
+# mypy
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.13"
+files = ["src"]
+strict = true
+warn_unreachable = true
+show_error_codes = true
+exclude = ["_labpack/"]
+
+# Azure SDKs and the agent stack ship incomplete or absent type information.
+# Narrow the exemption to named modules; never blanket-ignore.
+[[tool.mypy.overrides]]
+module = [
+    "agent_framework.*",
+    "agent_framework_foundry_hosting.*",
+    "agent_framework_azure_cosmos.*",
+    "azure.ai.projects.*",
+    "azure.ai.evaluation.*",
+    "azure.cosmos.*",
+    "azure.search.documents.*",
+    "azure.servicebus.*",
+    "azure.monitor.opentelemetry.*",
+    "sse_starlette.*",
+]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config"
+asyncio_mode = "auto"
+markers = [
+    "integration: requires deployed Azure resources",
+    "smoke: pre-broadcast confidence check",
+    "slow: takes more than 5 seconds",
+]
