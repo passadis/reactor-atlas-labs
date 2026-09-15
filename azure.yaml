@@ -1,0 +1,64 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+#
+# ATLAS PLATFORM project.
+#
+# This file owns the Azure footprint: resource group, Foundry account + project + the three model
+# deployments, Cosmos, AI Search, Service Bus, Container Apps, Functions, APIM, Logic Apps, Key
+# Vault and every role assignment.
+#
+# It does NOT own the Foundry hosted agent. That lives in ./agents/azure.yaml, because
+# infra.provider is a single value per file and the hosted-agent model requires
+# `microsoft.foundry` while this one requires `bicep`. See CLAUDE.md section 7.3.
+#
+#   azd provision              -> infra/main.bicep (subscription scope)
+#   azd deploy                 -> all five services below
+#   azd deploy web             -> one service
+#   azd deploy -C agents       -> the hosted agent (separate project)
+
+name: atlas
+metadata:
+  template: atlas-reactor-series@0.1.0
+
+infra:
+  provider: bicep
+  path: infra
+  module: main
+
+services:
+  web:
+    project: ./src/atlas_web
+    host: containerapp
+    language: py
+    docker:
+      remoteBuild: true
+
+  orchestrator:
+    project: ./src/atlas_orchestrator
+    host: containerapp
+    language: py
+    docker:
+      remoteBuild: true
+
+  worker:
+    project: ./src/atlas_worker
+    host: containerapp
+    language: py
+    docker:
+      remoteBuild: true
+
+  opsapi:
+    project: ./functions/ops_api
+    host: function
+    language: py
+
+  opsmcp:
+    project: ./functions/ops_mcp
+    host: function
+    language: py
+
+hooks:
+  postprovision:
+    shell: sh
+    run: ./scripts/postprovision.sh
+    continueOnError: false
+    interactive: false
