@@ -357,16 +357,24 @@ Cut deliberately, not forgotten. Each keeps its Episode beat via a cheaper path:
 | `atlas-stg` second environment (Phase 13.1) | Gate runs against the demo env with a run tag and a recorded green baseline. The gate still blocks the bad build. |
 | ACA canary traffic splitting (Phase 13.3) | `rollback.yml` only — that is what runs on stage. |
 | Routing orchestrator model traffic via APIM `atlas-models` (Phase 09.3) | The API and `llm-*` policies still exist and are demoed against a direct call. |
-| Handoff orchestration mode (Phase 06.3) | Sequential plus concurrent live; handoff on a slide. |
 | Logic Apps native agent-tool wizard (Phase 10.A2) | APIM path only — the portable one. |
 | Cloud red-team run (Phase 12.4) | Local scan only; same scorecard. |
 | Semantic caching / Managed Redis | `enableSemanticCache=false`, as the pack already defaults. |
 | **Second machine / co-presenter** (PREREQUISITES pre-Episode-1 checklist) | Solo presenter, system already deployed, deployment never demoed. Replaced by: fresh `az login` + `azd auth login` in the T-10 routine, a clean `git status` before going live, proven `scripts/restore_baseline.py`, complete fallback assets, and the hotspot. A second laptop does not survive a dead venue network; the fallback assets do. |
 
-**Candidate to un-cut if time allows:** handoff orchestration. It was costed assuming a hand-rolled
-implementation. `agent_framework_orchestrations` ships `HandoffBuilder` as a first-class builder
-(section 3 of `docs/API-NOTES.md`), so the real cost is much lower than estimated. Re-evaluate at
-Phase 06.
+**Reinstated 2026-09-15 (Episode 1 is 20 days out, runway is comfortable):**
+
+- **Handoff orchestration (Phase 06.3) is back in scope.** It was costed assuming a hand-rolled
+  implementation; `agent_framework_orchestrations` ships `HandoffBuilder` as a first-class builder.
+  All three orchestration patterns run live in Episode 2.
+
+**Confirmed still cut, despite the runway:** `atlas-stg`. The evaluate-only gate in section 9.2
+removed its purpose - the quality gate no longer deploys, and the deliberately-bad agent version
+lives as a pinned inactive version on the demo project. A second environment would double cost and
+double the surface that can drift between episodes, for no demo benefit.
+
+**Surplus time goes to Phase 14**, not to new scope: the full four-episode dry run, measured
+wall-clock for every control-plane chaos step (section 9.6), and complete fallback assets.
 
 ### 7.13 Sequencing changes
 
