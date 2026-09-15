@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(az:*)", "Bash(azd:*)", "Bash(uv:*)", "Bash(python:*)",
+      "Bash(pytest:*)", "Bash(func:*)", "Bash(gh:*)", "Bash(make:*)",
+      "Bash(git status)", "Bash(git diff:*)", "Bash(git log:*)"
+    ],
+    "deny": ["Bash(azd down:*)", "Bash(az group delete:*)"]
+  }
+}
