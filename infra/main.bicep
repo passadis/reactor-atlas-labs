@@ -201,6 +201,9 @@ module computeAca './modules/compute-aca.bicep' = {
     orchestratorIdentityClientId: identity.outputs.orchestratorClientId
     workerIdentityId: identity.outputs.workerId
     workerIdentityClientId: identity.outputs.workerClientId
+    webIdentityPrincipalId: identity.outputs.webPrincipalId
+    orchestratorIdentityPrincipalId: identity.outputs.orchestratorPrincipalId
+    workerIdentityPrincipalId: identity.outputs.workerPrincipalId
     cosmosEndpoint: data.outputs.cosmosEndpoint
     cosmosDatabaseName: data.outputs.cosmosDatabaseName
     searchEndpoint: data.outputs.searchServiceEndpoint
@@ -289,7 +292,6 @@ module rbac './modules/rbac.bicep' = {
     eventsTopicName: messaging.outputs.eventsTopicName
     storageAccountName: data.outputs.storageAccountName
     logicStorageAccountName: logicapps.outputs.logicStorageName
-    acrName: computeAca.outputs.acrName
     keyVaultName: data.outputs.keyVaultName
     appInsightsName: observability.outputs.appInsightsName
     logAnalyticsName: observability.outputs.logAnalyticsName

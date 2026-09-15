@@ -12,6 +12,8 @@ disagree, section 7 wins — it is backed by live API probes, not by assumptions
 
 ---
 
+## No Capability Masking
+
 ## 0. Prime directive: verify APIs, never recall them
 
 The Microsoft Foundry and Microsoft Agent Framework surfaces changed substantially through
@@ -556,3 +558,5 @@ wall-clock in `docs/DEMO-NOTES.md`: `kill_orchestrator.sh` (ACA scale 0 then 2),
 `chaos/model_throttle.sh` (APIM policy propagation), and the tool-list cache refresh after
 `inject_bad_tool_description.py` (the pack says up to 60 s). These are the beats most likely to
 overrun their slot.
+
+

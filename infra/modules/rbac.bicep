@@ -45,9 +45,6 @@ param storageAccountName string
 @description('Logic Apps host storage account name.')
 param logicStorageAccountName string
 
-@description('Container registry name.')
-param acrName string
-
 @description('Key Vault name.')
 param keyVaultName string
 
@@ -148,10 +145,6 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
 
 resource logicStorage 'Microsoft.Storage/storageAccounts@2023-05-01' existing = {
   name: logicStorageAccountName
-}
-
-resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
-  name: acrName
 }
 
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
@@ -409,18 +402,8 @@ resource operatorStorageContributor 'Microsoft.Authorization/roleAssignments@202
 }
 
 // ---------------------------------------------------------------------------- acr --
-
-resource acrPullAssignments 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
-  for p in [webPrincipalId, orchestratorPrincipalId, workerPrincipalId]: {
-    name: guid(acr.id, p, roles.acrPull)
-    scope: acr
-    properties: {
-      roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.acrPull)
-      principalId: p
-      principalType: 'ServicePrincipal'
-    }
-  }
-]
+// AcrPull is assigned in compute-aca.bicep, not here. It must exist BEFORE the container apps are
+// created or their first revision hangs until the 20 minute timeout. See that module.
 
 // ---------------------------------------------------------------------------- key vault --
 

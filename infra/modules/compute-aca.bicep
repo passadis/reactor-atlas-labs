@@ -34,6 +34,12 @@ param orchestratorIdentityClientId string
 param workerIdentityId string
 param workerIdentityClientId string
 
+// Principal ids are needed here, not just in rbac.bicep, because AcrPull must exist BEFORE the
+// container apps are created. See the AcrPull block below.
+param webIdentityPrincipalId string
+param orchestratorIdentityPrincipalId string
+param workerIdentityPrincipalId string
+
 // -- endpoints the apps need ------------------------------------------------------------------
 param cosmosEndpoint string
 param cosmosDatabaseName string
@@ -83,6 +89,32 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
     publicNetworkAccess: 'Enabled'
   }
 }
+
+// AcrPull, assigned HERE rather than in rbac.bicep.
+//
+// A container app that declares a `registries` entry resolves that registry credential while it
+// provisions its first revision. If the identity lacks AcrPull at that moment the operation does
+// not fail fast - it retries until the 20 minute revision timeout and reports
+// "ContainerAppOperationError: Operation expired". Observed on the third provision attempt,
+// 2026-09-15: all three apps hung for 20 minutes each with zero revisions created, because
+// rbac.bicep runs after this module and so no role assignment existed yet.
+//
+// Microsoft documents this ordering explicitly for IaC: create the identity, assign acrpull, THEN
+// create the container app.
+// https://learn.microsoft.com/azure/container-apps/managed-identity-image-pull
+var acrPullRoleId = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+
+resource acrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
+  for p in [webIdentityPrincipalId, orchestratorIdentityPrincipalId, workerIdentityPrincipalId]: {
+    name: guid(acr.id, p, acrPullRoleId)
+    scope: acr
+    properties: {
+      roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', acrPullRoleId)
+      principalId: p
+      principalType: 'ServicePrincipal'
+    }
+  }
+]
 
 // ---------------------------------------------------------------------------- environment --
 
@@ -176,6 +208,7 @@ resource webApp 'Microsoft.App/containerApps@2026-01-01' = {
       }
     }
   }
+  dependsOn: [acrPull]
 }
 
 resource orchestratorApp 'Microsoft.App/containerApps@2026-01-01' = {
@@ -237,6 +270,7 @@ resource orchestratorApp 'Microsoft.App/containerApps@2026-01-01' = {
       }
     }
   }
+  dependsOn: [acrPull]
 }
 
 resource workerApp 'Microsoft.App/containerApps@2026-01-01' = {
@@ -299,6 +333,7 @@ resource workerApp 'Microsoft.App/containerApps@2026-01-01' = {
       }
     }
   }
+  dependsOn: [acrPull]
 }
 
 output acrName string = acr.name
