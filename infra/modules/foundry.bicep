@@ -171,11 +171,19 @@ resource embedMain 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01'
 
 // ---------------------------------------------------------------------------- project --
 
+// Chained behind the model deployments, not parallel with them.
+//
+// A Cognitive Services account accepts ONE mutating operation at a time. The project is a child of
+// the account just as the deployments are, so ARM happily starts both at once and the second one
+// fails with RequestConflict: "Another operation is in progress on the resource". Observed on the
+// first real provision, 2026-09-15. The full serial chain is:
+//   account -> raiPolicy -> gpt-main -> gpt-judge -> embed-main -> project -> connections
 resource project 'Microsoft.CognitiveServices/accounts/projects@2026-07-01' = {
   parent: account
   name: projectName
   location: location
   tags: tags
+  dependsOn: [embedMain]
   identity: {
     type: 'SystemAssigned'
   }
