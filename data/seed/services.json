@@ -1,0 +1,747 @@
+[
+  {
+    "change_freeze": true,
+    "depends_on": [],
+    "environment": "prod",
+    "name": "Identity Service",
+    "on_call_rotation": "rot-platform-primary",
+    "owner_team": "team-platform",
+    "region": [
+      "eastus",
+      "westeurope",
+      "southeastasia"
+    ],
+    "repository": "contoso/identity",
+    "runbook_ids": [
+      "RB-0025",
+      "RB-0050"
+    ],
+    "service_id": "svc-identity",
+    "slo": {
+      "availability_target": 0.9995,
+      "error_budget_minutes_month": 21,
+      "latency_p95_ms": 250
+    },
+    "tier": 1
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [],
+    "environment": "prod",
+    "name": "Audit Log",
+    "on_call_rotation": "rot-platform-primary",
+    "owner_team": "team-platform",
+    "region": [
+      "eastus",
+      "westeurope",
+      "southeastasia"
+    ],
+    "repository": "contoso/audit-log",
+    "runbook_ids": [
+      "RB-0002",
+      "RB-0016",
+      "RB-0027",
+      "RB-0041",
+      "RB-0052"
+    ],
+    "service_id": "svc-audit-log",
+    "slo": {
+      "availability_target": 0.995,
+      "error_budget_minutes_month": 216,
+      "latency_p95_ms": 800
+    },
+    "tier": 3
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [],
+    "environment": "staging",
+    "name": "Feature Flags",
+    "on_call_rotation": "rot-platform-primary",
+    "owner_team": "team-platform",
+    "region": [
+      "westeurope",
+      "northeurope"
+    ],
+    "repository": "contoso/feature-flags",
+    "runbook_ids": [
+      "RB-0004",
+      "RB-0007",
+      "RB-0029",
+      "RB-0032",
+      "RB-0054",
+      "RB-0057"
+    ],
+    "service_id": "svc-feature-flags",
+    "slo": {
+      "availability_target": 0.99,
+      "error_budget_minutes_month": 432,
+      "latency_p95_ms": 2000
+    },
+    "tier": 4
+  },
+  {
+    "change_freeze": true,
+    "depends_on": [
+      "svc-audit-log",
+      "svc-identity"
+    ],
+    "environment": "prod",
+    "name": "Ledger",
+    "on_call_rotation": "rot-finance-primary",
+    "owner_team": "team-finance",
+    "region": [
+      "eastus",
+      "westeurope"
+    ],
+    "repository": "contoso/ledger",
+    "runbook_ids": [
+      "RB-0006",
+      "RB-0023",
+      "RB-0031",
+      "RB-0048",
+      "RB-0056"
+    ],
+    "service_id": "svc-ledger",
+    "slo": {
+      "availability_target": 0.9995,
+      "error_budget_minutes_month": 21,
+      "latency_p95_ms": 250
+    },
+    "tier": 1
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [
+      "svc-identity",
+      "svc-ledger"
+    ],
+    "environment": "prod",
+    "name": "Fraud Detection",
+    "on_call_rotation": "rot-risk-primary",
+    "owner_team": "team-risk",
+    "region": [
+      "westeurope",
+      "northeurope"
+    ],
+    "repository": "contoso/fraud",
+    "runbook_ids": [
+      "RB-0008",
+      "RB-0014",
+      "RB-0033",
+      "RB-0039",
+      "RB-0058"
+    ],
+    "service_id": "svc-fraud",
+    "slo": {
+      "availability_target": 0.999,
+      "error_budget_minutes_month": 43,
+      "latency_p95_ms": 400
+    },
+    "tier": 2
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [
+      "svc-feature-flags",
+      "svc-identity"
+    ],
+    "environment": "prod",
+    "name": "Pricing Engine",
+    "on_call_rotation": "rot-commerce-primary",
+    "owner_team": "team-commerce",
+    "region": [
+      "westeurope",
+      "northeurope"
+    ],
+    "repository": "contoso/pricing",
+    "runbook_ids": [
+      "RB-0005",
+      "RB-0010",
+      "RB-0030",
+      "RB-0035",
+      "RB-0055",
+      "RB-0060"
+    ],
+    "service_id": "svc-pricing",
+    "slo": {
+      "availability_target": 0.999,
+      "error_budget_minutes_month": 43,
+      "latency_p95_ms": 400
+    },
+    "tier": 2
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [
+      "svc-identity"
+    ],
+    "environment": "prod",
+    "name": "Inventory",
+    "on_call_rotation": "rot-supply-primary",
+    "owner_team": "team-supply",
+    "region": [
+      "eastus"
+    ],
+    "repository": "contoso/inventory",
+    "runbook_ids": [
+      "RB-0012",
+      "RB-0021",
+      "RB-0037",
+      "RB-0046"
+    ],
+    "service_id": "svc-inventory",
+    "slo": {
+      "availability_target": 0.999,
+      "error_budget_minutes_month": 43,
+      "latency_p95_ms": 400
+    },
+    "tier": 2
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [
+      "svc-identity"
+    ],
+    "environment": "prod",
+    "name": "Tax Calculation",
+    "on_call_rotation": "rot-finance-primary",
+    "owner_team": "team-finance",
+    "region": [
+      "westeurope",
+      "northeurope"
+    ],
+    "repository": "contoso/tax",
+    "runbook_ids": [
+      "RB-0012",
+      "RB-0014",
+      "RB-0037",
+      "RB-0039"
+    ],
+    "service_id": "svc-tax",
+    "slo": {
+      "availability_target": 0.995,
+      "error_budget_minutes_month": 216,
+      "latency_p95_ms": 800
+    },
+    "tier": 3
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [
+      "svc-identity"
+    ],
+    "environment": "prod",
+    "name": "Email Gateway",
+    "on_call_rotation": "rot-messaging-primary",
+    "owner_team": "team-messaging",
+    "region": [
+      "eastus",
+      "westeurope"
+    ],
+    "repository": "contoso/email-gateway",
+    "runbook_ids": [
+      "RB-0003",
+      "RB-0016",
+      "RB-0028",
+      "RB-0041",
+      "RB-0053"
+    ],
+    "service_id": "svc-email-gateway",
+    "slo": {
+      "availability_target": 0.995,
+      "error_budget_minutes_month": 216,
+      "latency_p95_ms": 800
+    },
+    "tier": 3
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [
+      "svc-identity"
+    ],
+    "environment": "prod",
+    "name": "SMS Gateway",
+    "on_call_rotation": "rot-messaging-primary",
+    "owner_team": "team-messaging",
+    "region": [
+      "westeurope",
+      "northeurope"
+    ],
+    "repository": "contoso/sms-gateway",
+    "runbook_ids": [
+      "RB-0018",
+      "RB-0019",
+      "RB-0043",
+      "RB-0044"
+    ],
+    "service_id": "svc-sms-gateway",
+    "slo": {
+      "availability_target": 0.995,
+      "error_budget_minutes_month": 216,
+      "latency_p95_ms": 800
+    },
+    "tier": 3
+  },
+  {
+    "change_freeze": true,
+    "depends_on": [
+      "svc-fraud",
+      "svc-identity",
+      "svc-ledger"
+    ],
+    "environment": "prod",
+    "name": "Payments",
+    "on_call_rotation": "rot-payments-primary",
+    "owner_team": "team-payments",
+    "region": [
+      "eastus"
+    ],
+    "repository": "contoso/payments",
+    "runbook_ids": [
+      "RB-0010",
+      "RB-0020",
+      "RB-0035",
+      "RB-0042",
+      "RB-0045",
+      "RB-0060"
+    ],
+    "service_id": "svc-payments",
+    "slo": {
+      "availability_target": 0.9995,
+      "error_budget_minutes_month": 21,
+      "latency_p95_ms": 250
+    },
+    "tier": 1
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [
+      "svc-email-gateway",
+      "svc-identity",
+      "svc-sms-gateway"
+    ],
+    "environment": "prod",
+    "name": "Notifications",
+    "on_call_rotation": "rot-messaging-primary",
+    "owner_team": "team-messaging",
+    "region": [
+      "westeurope",
+      "northeurope"
+    ],
+    "repository": "contoso/notifications",
+    "runbook_ids": [
+      "RB-0001",
+      "RB-0022",
+      "RB-0026",
+      "RB-0047",
+      "RB-0051"
+    ],
+    "service_id": "svc-notifications",
+    "slo": {
+      "availability_target": 0.999,
+      "error_budget_minutes_month": 43,
+      "latency_p95_ms": 400
+    },
+    "tier": 2
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [
+      "svc-identity",
+      "svc-inventory",
+      "svc-pricing"
+    ],
+    "environment": "prod",
+    "name": "Product Catalog",
+    "on_call_rotation": "rot-commerce-primary",
+    "owner_team": "team-commerce",
+    "region": [
+      "eastus"
+    ],
+    "repository": "contoso/catalog",
+    "runbook_ids": [
+      "RB-0017",
+      "RB-0024",
+      "RB-0049"
+    ],
+    "service_id": "svc-catalog",
+    "slo": {
+      "availability_target": 0.999,
+      "error_budget_minutes_month": 43,
+      "latency_p95_ms": 400
+    },
+    "tier": 2
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [
+      "svc-identity",
+      "svc-inventory"
+    ],
+    "environment": "prod",
+    "name": "Shipping",
+    "on_call_rotation": "rot-supply-primary",
+    "owner_team": "team-supply",
+    "region": [
+      "eastus",
+      "westeurope"
+    ],
+    "repository": "contoso/shipping",
+    "runbook_ids": [
+      "RB-0001",
+      "RB-0008",
+      "RB-0026",
+      "RB-0033",
+      "RB-0051",
+      "RB-0058"
+    ],
+    "service_id": "svc-shipping",
+    "slo": {
+      "availability_target": 0.995,
+      "error_budget_minutes_month": 216,
+      "latency_p95_ms": 800
+    },
+    "tier": 3
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [
+      "svc-catalog",
+      "svc-identity",
+      "svc-pricing"
+    ],
+    "environment": "prod",
+    "name": "Shopping Cart",
+    "on_call_rotation": "rot-commerce-primary",
+    "owner_team": "team-commerce",
+    "region": [
+      "eastus",
+      "westeurope"
+    ],
+    "repository": "contoso/cart",
+    "runbook_ids": [
+      "RB-0003",
+      "RB-0024",
+      "RB-0028",
+      "RB-0049",
+      "RB-0053"
+    ],
+    "service_id": "svc-cart",
+    "slo": {
+      "availability_target": 0.999,
+      "error_budget_minutes_month": 43,
+      "latency_p95_ms": 400
+    },
+    "tier": 2
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [
+      "svc-inventory",
+      "svc-payments",
+      "svc-shipping",
+      "svc-tax"
+    ],
+    "environment": "prod",
+    "name": "Order Management",
+    "on_call_rotation": "rot-commerce-primary",
+    "owner_team": "team-commerce",
+    "region": [
+      "westeurope",
+      "northeurope"
+    ],
+    "repository": "contoso/orders",
+    "runbook_ids": [
+      "RB-0005",
+      "RB-0015",
+      "RB-0030",
+      "RB-0040",
+      "RB-0055"
+    ],
+    "service_id": "svc-orders",
+    "slo": {
+      "availability_target": 0.999,
+      "error_budget_minutes_month": 43,
+      "latency_p95_ms": 400
+    },
+    "tier": 2
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [
+      "svc-cart",
+      "svc-identity",
+      "svc-notifications",
+      "svc-orders",
+      "svc-payments",
+      "svc-tax"
+    ],
+    "environment": "prod",
+    "name": "Checkout API",
+    "on_call_rotation": "rot-commerce-primary",
+    "owner_team": "team-commerce",
+    "region": [
+      "westeurope",
+      "northeurope"
+    ],
+    "repository": "contoso/checkout-api",
+    "runbook_ids": [
+      "RB-0006",
+      "RB-0007",
+      "RB-0031",
+      "RB-0032",
+      "RB-0042",
+      "RB-0056",
+      "RB-0057"
+    ],
+    "service_id": "svc-checkout-api",
+    "slo": {
+      "availability_target": 0.9995,
+      "error_budget_minutes_month": 21,
+      "latency_p95_ms": 250
+    },
+    "tier": 1
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [
+      "svc-checkout-api",
+      "svc-identity"
+    ],
+    "environment": "prod",
+    "name": "Loyalty Program",
+    "on_call_rotation": "rot-growth-primary",
+    "owner_team": "team-growth",
+    "region": [
+      "eastus",
+      "westeurope",
+      "southeastasia"
+    ],
+    "repository": "contoso/loyalty",
+    "runbook_ids": [
+      "RB-0009",
+      "RB-0022",
+      "RB-0034",
+      "RB-0047",
+      "RB-0059"
+    ],
+    "service_id": "svc-loyalty",
+    "slo": {
+      "availability_target": 0.995,
+      "error_budget_minutes_month": 216,
+      "latency_p95_ms": 800
+    },
+    "tier": 3
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [
+      "svc-checkout-api",
+      "svc-identity"
+    ],
+    "environment": "prod",
+    "name": "Product Reviews",
+    "on_call_rotation": "rot-growth-primary",
+    "owner_team": "team-growth",
+    "region": [
+      "eastus",
+      "westeurope",
+      "southeastasia"
+    ],
+    "repository": "contoso/reviews",
+    "runbook_ids": [
+      "RB-0011",
+      "RB-0013",
+      "RB-0036",
+      "RB-0038"
+    ],
+    "service_id": "svc-reviews",
+    "slo": {
+      "availability_target": 0.995,
+      "error_budget_minutes_month": 216,
+      "latency_p95_ms": 800
+    },
+    "tier": 3
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [
+      "svc-catalog",
+      "svc-checkout-api",
+      "svc-identity"
+    ],
+    "environment": "prod",
+    "name": "Search",
+    "on_call_rotation": "rot-discovery-primary",
+    "owner_team": "team-discovery",
+    "region": [
+      "eastus",
+      "westeurope"
+    ],
+    "repository": "contoso/search",
+    "runbook_ids": [
+      "RB-0004",
+      "RB-0013",
+      "RB-0029",
+      "RB-0038",
+      "RB-0054"
+    ],
+    "service_id": "svc-search",
+    "slo": {
+      "availability_target": 0.995,
+      "error_budget_minutes_month": 216,
+      "latency_p95_ms": 800
+    },
+    "tier": 3
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [
+      "svc-catalog",
+      "svc-checkout-api",
+      "svc-identity"
+    ],
+    "environment": "prod",
+    "name": "Recommendations",
+    "on_call_rotation": "rot-discovery-primary",
+    "owner_team": "team-discovery",
+    "region": [
+      "eastus",
+      "westeurope",
+      "southeastasia"
+    ],
+    "repository": "contoso/recommendations",
+    "runbook_ids": [
+      "RB-0015",
+      "RB-0020",
+      "RB-0040",
+      "RB-0045"
+    ],
+    "service_id": "svc-recommendations",
+    "slo": {
+      "availability_target": 0.995,
+      "error_budget_minutes_month": 216,
+      "latency_p95_ms": 800
+    },
+    "tier": 3
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [
+      "svc-checkout-api",
+      "svc-ledger",
+      "svc-orders"
+    ],
+    "environment": "staging",
+    "name": "Reporting",
+    "on_call_rotation": "rot-data-primary",
+    "owner_team": "team-data",
+    "region": [
+      "eastus",
+      "westeurope"
+    ],
+    "repository": "contoso/reporting",
+    "runbook_ids": [
+      "RB-0011",
+      "RB-0017",
+      "RB-0036"
+    ],
+    "service_id": "svc-reporting",
+    "slo": {
+      "availability_target": 0.99,
+      "error_budget_minutes_month": 432,
+      "latency_p95_ms": 2000
+    },
+    "tier": 4
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [
+      "svc-checkout-api",
+      "svc-identity",
+      "svc-orders"
+    ],
+    "environment": "staging",
+    "name": "Admin Portal",
+    "on_call_rotation": "rot-internal-primary",
+    "owner_team": "team-internal",
+    "region": [
+      "eastus"
+    ],
+    "repository": "contoso/admin-portal",
+    "runbook_ids": [
+      "RB-0002",
+      "RB-0019",
+      "RB-0027",
+      "RB-0044",
+      "RB-0052"
+    ],
+    "service_id": "svc-admin-portal",
+    "slo": {
+      "availability_target": 0.99,
+      "error_budget_minutes_month": 432,
+      "latency_p95_ms": 2000
+    },
+    "tier": 4
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [
+      "svc-checkout-api",
+      "svc-notifications"
+    ],
+    "environment": "staging",
+    "name": "Status Page",
+    "on_call_rotation": "rot-internal-primary",
+    "owner_team": "team-internal",
+    "region": [
+      "westeurope",
+      "northeurope"
+    ],
+    "repository": "contoso/status-page",
+    "runbook_ids": [
+      "RB-0018",
+      "RB-0021",
+      "RB-0043",
+      "RB-0046"
+    ],
+    "service_id": "svc-status-page",
+    "slo": {
+      "availability_target": 0.99,
+      "error_budget_minutes_month": 432,
+      "latency_p95_ms": 2000
+    },
+    "tier": 4
+  },
+  {
+    "change_freeze": false,
+    "depends_on": [
+      "svc-recommendations",
+      "svc-reporting",
+      "svc-search"
+    ],
+    "environment": "staging",
+    "name": "Analytics Pipeline",
+    "on_call_rotation": "rot-data-primary",
+    "owner_team": "team-data",
+    "region": [
+      "eastus"
+    ],
+    "repository": "contoso/analytics",
+    "runbook_ids": [
+      "RB-0009",
+      "RB-0023",
+      "RB-0034",
+      "RB-0048",
+      "RB-0059"
+    ],
+    "service_id": "svc-analytics",
+    "slo": {
+      "availability_target": 0.99,
+      "error_budget_minutes_month": 432,
+      "latency_p95_ms": 2000
+    },
+    "tier": 4
+  }
+]

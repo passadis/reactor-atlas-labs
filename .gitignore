@@ -38,3 +38,4 @@ verification-report.json
 Thumbs.db
 .env.local
 agents/.azure/
+.pytest-tmp/
