@@ -76,12 +76,25 @@ var commonEnv = [
 
 // ---------------------------------------------------------------------------- registry --
 
+// Standard, not the Premium the lab pack specifies.
+//
+// Premium buys geo-replication, private link and higher concurrency. ATLAS uses none of them: one
+// region, public endpoint, three images. Standard includes 100 GiB (vs Premium's 500), which is far
+// more than three Python images across many revisions will consume.
+//
+// NOT Basic, deliberately. azure.yaml sets docker.remoteBuild, so `azd deploy` builds through ACR
+// Tasks. The official SKU doc says all three SKUs share the same programmatic capabilities, but
+// Microsoft support guidance states Tasks are unavailable on Basic and fail with
+// TasksOperationsNotAllowed. That conflict is unresolved, and finding out the hard way means a
+// broken `azd deploy` in Phase 04. Standard satisfies both readings.
+//
+// SKU changes apply in place with no downtime and no image loss, so this can move either way later.
 resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
   name: acrName
   location: location
   tags: tags
   sku: {
-    name: 'Premium'
+    name: 'Standard'
   }
   properties: {
     // No admin user. Pulls are identity-based.

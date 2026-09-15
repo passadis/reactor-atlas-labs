@@ -115,3 +115,75 @@ All three are recorded with evidence in `CLAUDE.md` section 7 and `docs/API-NOTE
 Docker daemon is not running. It is only needed for `azd ai agent run` (the Phase 05 local loop);
 `azd deploy` builds remotely in ACR. Start Docker Desktop before Phase 05 if you want the local
 loop, otherwise ignore.
+
+---
+
+## Phase 01 — Infrastructure
+
+**Built:** the full Azure footprint. Subscription-scoped `infra/main.bicep` plus ten modules, the
+three Entra app registrations, the postprovision hook and `verify_phase01.sh`.
+
+**Not an on-stage phase**, but Episode 3 inspects several of these resources read-only, and the
+Episode 4 trace waterfall depends on the wiring done here.
+
+### Live endpoints
+
+| Thing | Value |
+|---|---|
+| Resource group | `rg-atlas-atlas` (eastus2) |
+| Foundry project | `https://aif-atlas-mkruniv7.services.ai.azure.com/api/projects/atlas-mkruniv7` |
+| Model aliases | `gpt-main` (gpt-5.4), `gpt-judge` (gpt-5.4-mini), `embed-main` (text-embedding-3-large) |
+| AI Search | `srch-atlas-mkruniv7` — **in eastus**, see CLAUDE.md 7.14 |
+| APIM gateway | `apim-atlas-mkruniv7` |
+| Web app | `ca-atlas-web-mkruniv7` (placeholder image until Phase 04) |
+
+### Commands
+
+```bash
+make provision          # azd provision --no-prompt
+make verify-phase01     # 31 checks against deployed resources
+make app-registrations  # idempotent; safe to re-run
+make verify-all         # every verify_phase*.sh in order
+```
+
+### Verified state at the end of Phase 01
+
+| Check | Result |
+|---|---|
+| `azd provision` | green |
+| Re-run `azd provision` | **green in 2m58s, no resource churn** (idempotency criterion) |
+| `make verify-phase01` | **31 pass, 0 fail** |
+| Secrets in `azd env get-values` | none |
+| Secrets in container env vars | none — endpoints and client ids only |
+| ARM role assignments | 77 |
+| Cosmos data-plane role assignments | 6 |
+
+### What took four attempts, and why it will not recur
+
+Recorded in full in `docs/API-NOTES.md` section 8. Short version, because each one is a trap that
+looks like something else:
+
+1. **AI Search had no capacity in eastus2, for any SKU.** Not quota. Search moved to `eastus`.
+2. **A Cognitive Services account accepts one mutating operation at a time.** The Foundry project
+   raced its own model deployments. Now serialised.
+3. **AcrPull must exist before a container app is created**, or the first revision hangs for 20
+   minutes and reports `Operation expired`. The assignment moved out of `rbac.bicep` and into the
+   module that creates the registry.
+4. **A Bicep output must never share a name with a parameter-input env var.** `ATLAS_SEARCH_LOCATION`
+   was both; azd wrote the output back over its own input as the display form `East US`, and the
+   second provision could not validate. This is the one that breaks idempotency silently.
+
+### Deviations from the pack made here
+
+- **ACR is Standard, not Premium.** ATLAS uses no geo-replication, no private link, one region.
+  Standard still includes 100 GiB. Not Basic, because `azd deploy` builds through ACR Tasks and the
+  sources conflict on whether Basic permits them. SKU changes apply in place.
+- **Search is in `eastus`** while everything else is in `eastus2`.
+
+### Fallbacks
+
+| If this fails live | Do this |
+|---|---|
+| A resource looks wrong on stage | `make verify-phase01` prints 31 named checks in about 40 seconds. Do not debug in the portal in front of an audience. |
+| A 403 right after any provision | Role propagation, up to 5 minutes. Wait, re-run, then investigate. `postprovision.sh` already polls for Cosmos role propagation. |
+| `az role assignment list` shows 0 | Azure CLI 2.90.0 defect, not a real problem. Use the ARM REST call in `verify_phase01.sh`. |

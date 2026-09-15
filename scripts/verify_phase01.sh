@@ -35,9 +35,27 @@ if [ "${COUNT:-0}" -ge 15 ]; then ok "1 resource group" "$COUNT resources"; else
 PROJECT_EP="$(get FOUNDRY_PROJECT_ENDPOINT)"
 TOKEN=$(az account get-access-token --scope "https://ai.azure.com/.default" --query accessToken -o tsv 2>/dev/null)
 if [ -n "$TOKEN" ] && [ -n "$PROJECT_EP" ]; then
-  CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $TOKEN" \
-         "${PROJECT_EP}/openai/v1/models?api-version=v1" --max-time 30 2>/dev/null)
-  if [ "$CODE" = "200" ]; then ok "2 foundry project endpoint" "HTTP 200"; else bad "2 foundry project endpoint" "HTTP ${CODE:-none}"; fi
+  # Two separate gotchas, both hit on 2026-09-16:
+  #   - the scope is https://ai.azure.com/.default, not management.azure.com
+  #   - /deployments takes ?api-version=v1, but the /openai/v1/... paths REJECT api-version with
+  #     400 "api-version query parameter is not allowed when using /v1 path"
+  # This asserts the three ALIASES resolve, not merely that the endpoint answers, so a rename or a
+  # half-applied model deployment is caught here rather than in Phase 03.
+  DEPLOYMENTS=$(curl -s -H "Authorization: Bearer $TOKEN" \
+                "${PROJECT_EP}/deployments?api-version=v1" --max-time 30 2>/dev/null)
+  FOUND=$(printf '%s' "$DEPLOYMENTS" | python -c "
+import json,sys
+try:
+    names={v.get('name') for v in json.load(sys.stdin).get('value',[])}
+except Exception:
+    print('0'); raise SystemExit
+print(len({'gpt-main','gpt-judge','embed-main'} & names))
+" 2>/dev/null)
+  if [ "${FOUND:-0}" = "3" ]; then
+    ok "2 foundry project endpoint" "3/3 aliases resolve"
+  else
+    bad "2 foundry project endpoint" "only ${FOUND:-0}/3 aliases resolved"
+  fi
 else
   bad "2 foundry project endpoint" "no token or endpoint"
 fi
@@ -99,7 +117,9 @@ done
 for pair in "ATLAS_FUNC_API_NAME:ops-api" "ATLAS_FUNC_MCP_NAME:ops-mcp"; do
   VAR="${pair%%:*}"; LABEL="${pair##*:}"
   APP="$(get "$VAR")"
-  ST=$(az functionapp show -n "$APP" -g "$RG" --query "state" -o tsv 2>/dev/null)
+  # az functionapp show --query state returns EMPTY for Flex Consumption apps. The generic
+  # resource view does populate it. Verified on func-atlas-api 2026-09-16.
+  ST=$(az resource show -g "$RG" -n "$APP" --resource-type Microsoft.Web/sites --query "properties.state" -o tsv 2>/dev/null)
   check "${ST:-unknown}" "Running" "8 functionapp ${LABEL}" "Running"
 done
 
@@ -113,7 +133,7 @@ check "${LOGGER:-missing}" "applicationInsights" "9 apim logger" "applicationIns
 
 # 10 -- Logic Apps host running ----------------------------------------------
 LOGIC="$(get ATLAS_LOGICAPP_NAME)"
-LST=$(az functionapp show -n "$LOGIC" -g "$RG" --query "state" -o tsv 2>/dev/null)
+LST=$(az resource show -g "$RG" -n "$LOGIC" --resource-type Microsoft.Web/sites --query "properties.state" -o tsv 2>/dev/null)
 check "${LST:-unknown}" "Running" "10 logic app host" "Running"
 
 # 11 -- role assignments ------------------------------------------------------
@@ -121,11 +141,17 @@ check "${LST:-unknown}" "Running" "10 logic app host" "Running"
 CRA=$(az cosmosdb sql role assignment list --account-name "$COSMOS" -g "$RG" --query "length(@)" -o tsv 2>/dev/null)
 if [ "${CRA:-0}" -ge 5 ]; then ok "11 cosmos sql role assignments" "${CRA} found"; else bad "11 cosmos sql role assignments" "only ${CRA:-0}, expected >= 5"; fi
 
-ARA=$(az role assignment list --scope "/subscriptions/$(get AZURE_SUBSCRIPTION_ID)/resourceGroups/${RG}" --query "length(@)" -o tsv 2>/dev/null)
+# az role assignment list -g returns 0 here, and --scope fails outright with MissingSubscription
+# on az 2.90.0, even though 77 assignments exist. The ARM REST call with $filter=atScope() is the
+# only reliable read. docs/API-NOTES.md.
+ARA=$(az rest --method GET   --url "https://management.azure.com/subscriptions/$(get AZURE_SUBSCRIPTION_ID)/resourceGroups/${RG}/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&\$filter=atScope()"   --query "length(value)" -o tsv 2>/dev/null)
 if [ "${ARA:-0}" -ge 20 ]; then ok "11 arm role assignments" "${ARA} found"; else bad "11 arm role assignments" "only ${ARA:-0}, expected >= 20"; fi
 
 # 12 -- no secrets leaked into azd outputs ------------------------------------
-LEAKS=$(grep -icE '(AccountKey=|SharedAccessKey=|"key":|password)' .env.local 2>/dev/null || echo 0)
+# grep -c already prints 0 when nothing matches AND exits 1, so a "|| echo 0" fallback appended a
+# second zero and produced a two-line value, which broke the integer test.
+LEAKS=$(grep -icE '(AccountKey=|SharedAccessKey=|"key":|password)' .env.local 2>/dev/null | head -1)
+LEAKS="${LEAKS:-0}"
 # APPLICATIONINSIGHTS_CONNECTION_STRING carries an InstrumentationKey by design; excluded.
 if [ "${LEAKS:-0}" -eq 0 ]; then ok "12 no key material in .env.local" "clean"; else bad "12 no key material in .env.local" "${LEAKS} suspicious lines"; fi
 

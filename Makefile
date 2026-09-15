@@ -59,12 +59,20 @@ probe: ## Re-verify the agent-stack symbol surface by import
 
 # ---------------------------------------------------------------- Phase 01 --
 .PHONY: provision
-provision: ## azd provision (Phase 01)
-	$(call PENDING,Phase 01 - infrastructure)
+provision: ## azd provision the Azure footprint
+	azd provision --no-prompt
+
+.PHONY: verify-phase01
+verify-phase01: ## Verify the deployed Phase 01 footprint
+	bash scripts/verify_phase01.sh
+
+.PHONY: app-registrations
+app-registrations: ## Create or update the three Entra app registrations
+	bash scripts/create_app_registrations.sh
 
 .PHONY: deploy
-deploy: ## azd deploy all services (Phase 01/04)
-	$(call PENDING,Phase 01 - infrastructure)
+deploy: ## azd deploy all services (Phase 04)
+	$(call PENDING,Phase 04 - web app)
 
 # ---------------------------------------------------------------- Phase 02 --
 .PHONY: seed
@@ -88,7 +96,8 @@ trace-check: ## Assert one trace spans all six hops for CASE=<case_id> (Phase 11
 # ---------------------------------------------------------------- Phase 14 --
 .PHONY: verify-all
 verify-all: ## Run every scripts/verify_phase*.sh plus smoke and security (Phase 14)
-	$(call PENDING,Phase 14 - hardening and verification)
+	@set -e; for s in scripts/verify_phase*.sh; do 	  echo "=== $$s ==="; bash "$$s"; 	done
+	@echo "All phase verifications passed."
 
 .PHONY: demo-reset
 demo-reset: ## Return runtime state to the known-good baseline in under 60s (Phase 14)

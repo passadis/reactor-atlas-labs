@@ -327,3 +327,109 @@ wraps `initialize` / `notifications/initialized` / `tools/call` against
 
 Approve the server once in an interactive `claude` session so it becomes a first-class tool; the
 prime directive is unenforceable without it.
+
+---
+
+## 8. Provisioning findings (Phase 01, 2026-09-16)
+
+Four `azd provision` attempts were needed. Every failure was a real defect or a real Azure
+constraint, and each is now fixed in the template. Recorded so none of them is rediscovered.
+
+### 8.1 AI Search: eastus2 had no capacity, for any SKU
+
+`InsufficientResourcesAvailable`. Probed directly: `basic` fails too, so it is regional capacity
+exhaustion rather than a tier or quota problem. Resolution and the full region probe table are in
+`CLAUDE.md` section 7.14. Search runs in `eastus`; everything else stays in `eastus2`.
+
+### 8.2 One mutating operation at a time per Cognitive Services account
+
+`RequestConflict: Another operation is in progress on the resource .../accounts/<name>`.
+
+The Foundry **project** is a child of the account exactly as the model **deployments** are, so ARM
+started both concurrently and the loser failed. Chaining the deployments to each other was not
+enough. The full serial chain that works:
+
+```
+account -> raiPolicy -> gpt-main -> gpt-judge -> embed-main -> project -> connections
+```
+
+### 8.3 AcrPull must exist BEFORE a container app is created
+
+`ContainerAppOperationError: Failed to provision revision ... Operation expired`, on all three apps,
+after 20 minutes each, with **zero revisions created**.
+
+A container app that declares a `registries` entry resolves that registry credential while
+provisioning its first revision. With no AcrPull at that moment it does not fail fast - it retries
+until the revision timeout. Confirmed by inspection: zero role assignments existed in the resource
+group at the time, because `rbac.bicep` runs after `compute-aca`.
+
+Microsoft documents the required order for IaC - create identity, assign acrpull, then create the
+app ([managed-identity-image-pull](https://learn.microsoft.com/azure/container-apps/managed-identity-image-pull)).
+The three AcrPull assignments now live in `compute-aca.bicep` next to the registry, and each app
+carries `dependsOn: [acrPull]`.
+
+**Generalise this:** any role assignment a resource needs *at creation time* belongs in the module
+that creates the resource, not in `rbac.bicep`. `rbac.bicep` is for runtime access only.
+
+### 8.4 Bicep caps a deployment at 64 outputs
+
+Hit while adding the search location. The five managed-identity principal-id outputs were dropped;
+they are consumed inside the template by `rbac.bicep` and nothing downstream reads them. Recover one
+with `az identity show -n <name> -g <rg> --query principalId -o tsv`.
+
+### 8.5 Azure CLI quirks that broke verification, not the deployment
+
+These cost real time and will recur in the Phase 14 security verification, so they are pinned here.
+
+| Symptom | Reality | Use instead |
+|---|---|---|
+| `az functionapp show --query state` returns **empty** for Flex Consumption | The app is `Running` | `az resource show -g <rg> -n <app> --resource-type Microsoft.Web/sites --query properties.state` |
+| `az role assignment list -g <rg>` returns **0** | 77 assignments exist | `az rest` on `.../providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&$filter=atScope()` |
+| `az role assignment list --scope <id>` fails with `MissingSubscription` | az CLI 2.90.0 defect, not a permissions problem | same ARM REST call |
+
+### 8.6 Foundry project data-plane endpoint shapes
+
+Confirmed against the live project:
+
+```
+GET {PROJECT_ENDPOINT}/deployments?api-version=v1     -> 200, lists the deployment aliases
+GET {PROJECT_ENDPOINT}/models?api-version=v1          -> 200
+GET {PROJECT_ENDPOINT}/openai/v1/models               -> 404 without api-version
+GET {PROJECT_ENDPOINT}/openai/v1/models?api-version=v1-> 400
+```
+
+That 400 is explicit and worth remembering:
+`"api-version query parameter is not allowed when using /v1 path"`. The `/openai/v1/...` surface
+takes **no** `api-version`; the project-level routes require it. Token scope is
+`https://ai.azure.com/.default`, not `management.azure.com`.
+
+`verify_phase01.sh` asserts all three aliases resolve through this endpoint, so a rename or a
+half-applied model deployment fails here rather than in Phase 03.
+
+### 8.7 An auto-created resource inflates the resource count
+
+Application Insights creates a `Failure Anomalies` smart-detector alert rule by itself. The resource
+group therefore holds one more resource than the template declares. Any check that asserts an exact
+resource count will be wrong; `verify_phase01.sh` uses a lower bound.
+
+### 8.8 Never give a Bicep output the same name as a parameter-input env var
+
+`azd provision` succeeded, then the **second** run failed validation:
+
+```
+InvalidTemplate: The provided value for the template parameter 'searchLocation' is not valid.
+The value 'East US' is not part of the allowed value(s): 'eastus,eastus2,centralus,swedencentral'.
+```
+
+`ATLAS_SEARCH_LOCATION` was doing two jobs: it fed the `searchLocation` parameter through
+`main.parameters.json` (`${ATLAS_SEARCH_LOCATION=eastus}`), and it was also the name of an output.
+azd writes deployment outputs back into the azd environment, so the output overwrote its own input.
+Worse, `search.location` returns the **display** form `East US`, not the slug `eastus`, so the next
+run failed the `@allowed` list.
+
+This breaks idempotency silently: the first provision is green and the second one cannot even
+validate. The output is now `ATLAS_SEARCH_SVC_LOCATION`.
+
+**Rule for every later phase:** an output name must never collide with an env var that feeds a
+parameter. When an output echoes an input, give it a distinct name, and remember that Azure
+location outputs come back as display names rather than slugs.

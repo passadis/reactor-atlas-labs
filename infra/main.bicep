@@ -342,7 +342,11 @@ output ATLAS_COSMOS_ENDPOINT string = data.outputs.cosmosEndpoint
 output ATLAS_COSMOS_DATABASE string = data.outputs.cosmosDatabaseName
 output ATLAS_SEARCH_SERVICE_NAME string = data.outputs.searchServiceName
 output ATLAS_SEARCH_ENDPOINT string = data.outputs.searchServiceEndpoint
-output ATLAS_SEARCH_LOCATION string = data.outputs.searchServiceLocation
+// NOT named ATLAS_SEARCH_LOCATION. That name is the azd environment variable feeding the
+// searchLocation PARAMETER, and azd writes outputs back into the environment - so an identically
+// named output overwrites its own input. search.location returns the display form ("East US"),
+// which then fails the @allowed list on the next run and breaks idempotency. Observed 2026-09-16.
+output ATLAS_SEARCH_SVC_LOCATION string = data.outputs.searchServiceLocation
 output ATLAS_STORAGE_ACCOUNT_NAME string = data.outputs.storageAccountName
 output ATLAS_STORAGE_BLOB_ENDPOINT string = data.outputs.storageBlobEndpoint
 
