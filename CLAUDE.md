@@ -457,3 +457,58 @@ controls, three different jobs.
 
 The encore must be measured during Phase 14 rehearsal and its real wall-clock time recorded in
 `docs/DEMO-NOTES.md`. If it does not fit in five minutes, it is not an encore — split it or cut it.
+
+---
+
+## 9. Live-session mutation policy (decided 2026-09-15)
+
+**No builds, no deployments, no infrastructure changes during a broadcast.** Sessions are
+demonstrations of capability plus read-only inspection of code and already-deployed resources.
+
+"Read-only" means no `azd deploy`, no `docker build`, no `az ... create/update` on infrastructure,
+no ACA revision change, no Bicep. It does **not** mean the application is read-only: raising an
+incident, approving a plan, dispatching remediation and writing a ticket are the demo. Application
+data writes are fine. Control-plane writes are not.
+
+`make demo-reset` is a data write and belongs in the **T-10 routine only** — never mid-session.
+
+### Consequences the build must honour
+
+**9.1 Agent instructions live outside the container image.** Phase 03 says instructions are "loaded
+at runtime". That is not enough: if they are read from a file baked into the image, switching v0 to
+v1 is a redeploy. The v0/v1 switch is used in **Episode 1 Beat 2** and **Episode 4 Beat 4**, so it
+must be a data read. Store instruction versions in Cosmos (or blob) and select the active version
+per request via a header or session setting. `inject_weak_instructions.py` then becomes a document
+write, not a deployment. Files under `src/atlas_agent/instructions/` remain the source of truth in
+git and are seeded to Cosmos by `scripts/seed.py`.
+
+**9.2 The Phase 13 quality gate needs an evaluate-only mode.** Episode 4's centrepiece is "the gate
+blocks the bad build". A gate that builds and deploys is a build and a deploy. Requirements:
+- The deliberately-bad artifact is **pre-created and already deployed** as a pinned, non-active
+  agent version before Episode 1. Breaking the agent on stage is
+  `scripts/pin_agent_version.sh <bad-version>` — a pointer flip, not a build.
+- `agent-quality-gate.yml` gains `--evaluate-only`, which skips build and deploy and evaluates an
+  already-deployed version.
+- On stage you show a **run that already happened**: the red X, the scorecard artifact, the
+  per-category diff. Optionally trigger a live re-run and let it churn in a background tab while you
+  talk. Never wait on it. Never let it deploy.
+
+**9.3 `chaos/ops_api_down.sh` uses the chaos flag, never stops the Function App.** The pack offers
+both; the flag (application-level 503) is the only permitted one. Stopping a Function App is a
+control-plane write with a cold-start tail on the way back.
+
+**9.4 `chaos/revoke_servicebus_role.sh` is pre-staged or recorded.** Role-assignment propagation is
+up to 5 minutes and not under our control, so a live revert can hang past the beat. Either
+demonstrate it against a secondary identity that is not on the demo path, or use the recorded
+fallback. Do not revoke a role the live demo depends on.
+
+**9.5 `chaos-restore.yml` retargets.** The pack runs it nightly against `atlas-stg`, which is cut
+(section 7.12). Retarget to the demo environment, at 03:00, with a **blackout window** that
+refuses to run within 6 hours either side of a scheduled episode. It must still end every run with
+`restore_baseline.py` plus `verify_smoke.sh` green.
+
+**9.6 Time every control-plane chaos step in Phase 14 rehearsal** and record the measured
+wall-clock in `docs/DEMO-NOTES.md`: `kill_orchestrator.sh` (ACA scale 0 then 2),
+`chaos/model_throttle.sh` (APIM policy propagation), and the tool-list cache refresh after
+`inject_bad_tool_description.py` (the pack says up to 60 s). These are the beats most likely to
+overrun their slot.
