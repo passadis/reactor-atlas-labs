@@ -361,6 +361,12 @@ Cut deliberately, not forgotten. Each keeps its Episode beat via a cheaper path:
 | Logic Apps native agent-tool wizard (Phase 10.A2) | APIM path only — the portable one. |
 | Cloud red-team run (Phase 12.4) | Local scan only; same scorecard. |
 | Semantic caching / Managed Redis | `enableSemanticCache=false`, as the pack already defaults. |
+| **Second machine / co-presenter** (PREREQUISITES pre-Episode-1 checklist) | Solo presenter, system already deployed, deployment never demoed. Replaced by: fresh `az login` + `azd auth login` in the T-10 routine, a clean `git status` before going live, proven `scripts/restore_baseline.py`, complete fallback assets, and the hotspot. A second laptop does not survive a dead venue network; the fallback assets do. |
+
+**Candidate to un-cut if time allows:** handoff orchestration. It was costed assuming a hand-rolled
+implementation. `agent_framework_orchestrations` ships `HandoffBuilder` as a first-class builder
+(section 3 of `docs/API-NOTES.md`), so the real cost is much lower than estimated. Re-evaluate at
+Phase 06.
 
 ### 7.13 Sequencing changes
 
@@ -373,3 +379,81 @@ Cut deliberately, not forgotten. Each keeps its Episode beat via a cheaper path:
    workbook, alerts and trace tooling on top of an already-instrumented system.
 5. Phase 02 is budgeted at 90 minutes, not 30. Everything downstream blocks on the seed data.
 6. Phases 06 through 13 are budgeted at roughly double the pack's estimate.
+
+---
+
+## 8. Presentation model (decided 2026-09-15)
+
+This shapes Phases 04, 06, 10 and 14. Read it before designing any UI or demo entry point.
+
+### The format
+
+Four sessions, delivered **sequentially** — Episode 1, then 2, then 3, then 4, spread over the
+series. Each session is roughly **15 minutes of narrative** (the case, the concepts, the why),
+then **demo mode** for the rest of the slot.
+
+In demo mode the presenter shows **only the parts that belong to that episode** — but must be able
+to take the demo **all the way to end-to-end at any moment, in any episode, including Episode 1**,
+if the room asks for it or there is time left.
+
+### Two hard consequences
+
+**1. The entire system is live from Episode 1.** There is no "Episode 3 plumbing gets finished in
+the gap between sessions." Episode 1's encore path runs through APIM, Functions, Service Bus,
+Logic Apps and the worker. Everything in Phases 01-14 is deployed, verified and frozen before
+Episode 1 airs. This is the pack's rule already; the encore requirement makes it non-negotiable.
+
+**2. Scope is a VIEW filter, never a capability switch.** This is the load-bearing design decision.
+
+`ATLAS_DEMO_SCOPE = ep1 | ep2 | ep3 | ep4 | full` controls **what the UI reveals**, not what the
+backend can do. The backend is always fully capable. Switching scope must be:
+
+- **hot** — a dropdown in the web app and a `?scope=` URL parameter, applied per request;
+- **instant** — no restart, no redeploy, no env-var change, no container revision;
+- **non-destructive** — it never changes system behaviour, only which panels, nodes and events are
+  surfaced.
+
+If scope ever becomes a functional switch, the encore becomes a restart, and a restart in front of
+an audience is a failure mode. Any design that requires `azd deploy` to change scope is wrong.
+
+Do not confuse `ATLAS_DEMO_SCOPE` with `ATLAS_ORCHESTRATION_MODE` (Phase 06, which genuinely does
+change the graph shape) or with the four-hosting-shapes mode switch (Phase 04/05). Three different
+controls, three different jobs.
+
+### What each scope reveals
+
+| Scope | Reveals | Hides (still running underneath) |
+|---|---|---|
+| `ep1` | Chat console, streaming tokens, tool-call activity panel, structured output, citations, the four hosting shapes | Workflow graph, approval console, remediation timeline, traces, scorecards |
+| `ep2` | Everything in `ep1` plus the live workflow graph, typed state, decision log, checkpoints, approval gate | Remediation execution detail, gateway internals, evaluation |
+| `ep3` | Everything in `ep2` plus APIM hop annotations, MCP tool provenance, Service Bus progress, worker step timeline, ticket creation | Evaluation and quality-gate surfaces |
+| `ep4` | Everything | Nothing |
+| `full` | Alias for `ep4`. The encore. | Nothing |
+
+### Requirements this places on later phases
+
+- **Phase 04 (web app):** the scope selector, `?scope=`, and per-scope panel visibility. Panels are
+  hidden with `hidden`, not unmounted, so switching mid-run does not lose state.
+- **Phase 06:** `GET /cases/{id}/graph` and the SSE event stream always emit the full event set;
+  the client filters. Never filter server-side, or the encore loses history for events that already
+  happened.
+- **Phase 10:** the remediation path must be demoable cold, from Episode 1, without Episode 2's
+  approval demo having been run first.
+- **Phase 14:** `scripts/verify_demo_paths.sh` asserts **five** paths — the four scoped episode
+  demos and the full end-to-end encore — each starting from a cold `make demo-reset`. No episode
+  demo may depend on another episode's demo having been run.
+- **Runbooks:** every episode gets an **Encore** section with the one command that takes it to
+  end-to-end, its expected wall-clock time, and the point of no return after which there is not
+  enough slot left to start it.
+
+### Timing budget per episode
+
+| Segment | Minutes |
+|---|---|
+| Narrative and case | 15 |
+| Scoped demo | 25-30 |
+| Encore (optional, end-to-end) | 3-5 |
+| Q&A and buffer | 10-15 |
+
+The encore must be measured during Phase 14 rehearsal and its real wall-clock time recorded in
+`docs/DEMO-NOTES.md`. If it does not fit in five minutes, it is not an encore — split it or cut it.

@@ -5,6 +5,48 @@ fails live. Phases that produce no on-stage artefact still record their verifica
 
 ---
 
+## Series-wide presentation model
+
+Decided 2026-09-15. Full detail in `CLAUDE.md` section 8.
+
+Four sessions delivered **sequentially** (Episode 1, then 2, then 3, then 4). Each: about 15
+minutes of narrative, then demo mode scoped to that episode — **with the option to go end-to-end
+at any moment, in any episode, including Episode 1.**
+
+That option is the constraint that matters. It means:
+
+- The whole system is live before Episode 1. No finishing Episode 3's plumbing between sessions.
+- `ATLAS_DEMO_SCOPE` (`ep1 | ep2 | ep3 | ep4 | full`) is a **view filter, not a capability
+  switch** — a dropdown and a `?scope=` parameter, applied per request. No restart, no redeploy.
+  A restart in front of an audience is a failure mode.
+- Every episode runbook gets an **Encore** section: the one command to go end-to-end, its measured
+  wall-clock time, and the point in the slot after which there is no longer time to start it.
+- `scripts/verify_demo_paths.sh` (Phase 14) asserts **five** paths, not four: each episode's scoped
+  demo plus the full encore, each from a cold `make demo-reset`, none depending on another having
+  run first.
+
+Encore wall-clock time: **to be measured in Phase 14 rehearsal and recorded here.** If it exceeds
+five minutes it gets split or cut.
+
+### Pre-broadcast checklist (replaces the pack's)
+
+- [ ] `make verify-all` green
+- [ ] `scripts/verify_security.sh` zero findings
+- [ ] Full four-episode dry run completed and timed, including all five demo paths
+- [ ] `PINNED STATE` recorded below
+- [ ] Fallback assets captured in `docs/assets/fallbacks/`
+- [ ] **Fresh `az login` and `azd auth login`** — do this in the T-10 routine, every episode
+- [ ] **Clean `git status`** — no half-applied chaos injection from rehearsal
+- [ ] `scripts/restore_baseline.py` proven to restore
+- [ ] Mobile hotspot, in case the venue network dies during Episode 3
+
+The pack's "second machine or co-presenter" item is **deliberately dropped** — solo presenter,
+system already deployed, deployment never demoed. See `CLAUDE.md` section 7.12. The items in bold
+above are what actually carried that risk; a second laptop does not survive a dead venue network,
+and the fallback assets do.
+
+---
+
 ## Phase 00 — Bootstrap
 
 **Built:** repository skeleton, uv workspace on Python 3.13, pinned agent stack, the reproducible
