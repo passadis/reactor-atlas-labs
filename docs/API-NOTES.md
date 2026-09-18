@@ -433,3 +433,93 @@ validate. The output is now `ATLAS_SEARCH_SVC_LOCATION`.
 **Rule for every later phase:** an output name must never collide with an env var that feeds a
 parameter. When an output echoes an input, give it a distinct name, and remember that Azure
 location outputs come back as display names rather than slugs.
+
+---
+
+## 9. Seeding and retrieval findings (Phase 02, 2026-09-18)
+
+### 9.1 Embeddings: the OpenAI v1 surface on the account host, Entra auth
+
+Verified via Microsoft Learn and by a live call:
+
+```python
+OpenAI(
+    base_url="https://<account>.services.ai.azure.com/openai/v1/",   # account host, not project
+    api_key=get_bearer_token_provider(credential, "https://ai.azure.com/.default"),
+)
+client.embeddings.create(model="embed-main", input=[...])            # the alias, not the model name
+```
+
+- `/openai/v1/` takes **no** `api-version` (section 8.6).
+- A token provider as `api_key` needs `openai >= 1.106`; installed is 3.14.0.
+- `AsyncOpenAI` accepts `Callable[[], Awaitable[str]]`, which pairs with
+  `azure.identity.aio.get_bearer_token_provider`. Confirmed from the installed signature.
+- Response vectors are 3072-dimensional; the seeder asserts it and fails loudly otherwise.
+
+### 9.2 azure-search-documents 12.0.0: generated models hide their parameters
+
+Every model constructor is `(*args, **kwargs)`, so `inspect.signature` shows nothing and IDE
+completion is useless. The real names were read from `indexes/models/_models.py`:
+`SearchField(vector_search_dimensions=..., vector_search_profile_name=...)`,
+`VectorSearchProfile(name, algorithm_configuration_name)`,
+`SemanticPrioritizedFields(title_field, content_fields)`.
+
+`SearchFieldDataType.Collection(...)` works at runtime but is attached to an enum, so mypy reports
+`"Enum" not callable`. The index definition uses the documented wire values
+`"Collection(Edm.String)"` and `"Collection(Edm.Single)"` instead.
+
+### 9.3 Chunking decided whether the canonical runbook could be retrieved at all
+
+The first chunker split at every `##` heading. A runbook that fits in one ~800-token chunk became
+five fragments, each only partly about its subject. Against 500 incident records titled literally
+"Checkout Api latency degradation", the canonical query returned **five incidents and no
+runbook**; RB-0042 was absent from the top five. Episode 4 asserts `must_cite: ["RB-0042"]`, so that
+eval would have failed for a reason nobody would have looked for in the chunker.
+
+Fix: pack sections greedily up to the budget, keep `## ` headings inline, prefix every chunk with
+the title plus `Services: ... Risk: ...` (filters narrow retrieval, but only text reaches the
+keyword and semantic rankers). Result, hybrid plus semantic reranking:
+
+| Query scope | RB-0042 rank | Reranker score vs next |
+|---|---|---|
+| unscoped | #3 | 2.37 vs 2.36 - passes the spec, but by 0.01 |
+| `doc_type eq 'runbook'` | **#1** | 2.37 vs 2.05 |
+
+**Decision:** the knowledge agent retrieves runbooks and past incidents as **separate scoped
+searches**, which is also how ARCHITECTURE.md describes it. `KnowledgeSearch.search(doc_types=...)`
+supports it, the golden fixture freezes the scoped ranking, and `verify_phase02.sh` checks both.
+The unscoped pass is not relied on; a reranker update could flip a 0.01 margin.
+
+### 9.4 Reference-data containers belong in Bicep, not the seeder
+
+The seeder needs `services`, `changes`, `telemetry`, `people`, `entitlements`. Container creation is
+control-plane, the operator holds a data-plane role, so a seeder that created them would 403 - the
+general form of the trap in section 7.9. They are in `data.bicep`, together with
+`agent-instructions` for Phase 03 (CLAUDE.md 9.1). `seed.py` checks each container exists and, if
+not, says to run `azd provision` rather than attempting creation.
+
+### 9.5 Idempotency proven, not assumed
+
+Every search document stores `content_hash`, so a re-seed embeds only changed text and deletes
+documents no longer in the seed. The chunking fix exercised it for real: **60 embedded, 608
+unchanged and skipped, 242 obsolete fragments deleted**. With unchanged data, `verify_phase02.sh`
+re-runs the full seeder and asserts the Cosmos fingerprint is identical (system fields such as
+`_ts` excluded) and that zero documents were re-embedded.
+
+### 9.6 Seeded incidents are marked
+
+Seeded incidents carry `source: "seed"`, so `make demo-reset` can delete only incidents raised
+during a demo, and seeded-count checks are not skewed by demo traffic.
+
+### 9.7 Harmless but noisy: Cosmos SDK logging on a dead endpoint
+
+The failure-path test points `CosmosStore` at a non-existent account. The SDK logs `Marking
+https://... unavailable for Read` before `RepositoryUnavailableError` is raised (in about 1 s). That
+line is SDK logging, not an application error. The Phase 03 telemetry module should raise the
+`azure.cosmos` logger to WARNING-only for anything that reaches a projected terminal.
+
+### 9.8 Correction to an earlier report
+
+Telemetry is **6,768** windows. The 6,816 reported mid-Phase 02 came from the first generation run,
+before the near-duplicate fix changed incident services and timings. File, manifest, git and Cosmos
+all agree on 6,768.

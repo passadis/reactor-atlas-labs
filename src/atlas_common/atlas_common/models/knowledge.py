@@ -48,4 +48,45 @@ class KnowledgeDocument(BaseModel):
     owner_team: str | None = None
     source_path: str
     injection_canary: bool = False
+    # sha256 of the embedded text. Lets a re-seed skip re-embedding unchanged documents, which is
+    # what makes scripts/seed.py idempotent and cheap to re-run.
+    content_hash: str = ""
     content_vector: list[float] = Field(default_factory=list)
+
+
+class KnowledgeHit(BaseModel):
+    """One retrieved document, as a tool returns it to an agent.
+
+    `doc_id` is what the agent cites. A factual claim without one is ungrounded, and the
+    instructions tell the agent to say "I have no grounded source for that" instead.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    doc_id: str
+    doc_type: DocType
+    title: str
+    snippet: str
+    services: list[str]
+    last_reviewed: str | None
+    score: float
+    reranker_score: float | None = None
+    injection_canary: bool = False
+
+
+class KnowledgeResults(BaseModel):
+    """What `search_knowledge` returns. Empty `hits` is a valid, typed answer - never an error."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    hits: list[KnowledgeHit]
+
+    @property
+    def citations(self) -> list[str]:
+        """Distinct doc ids in rank order."""
+        seen: list[str] = []
+        for hit in self.hits:
+            if hit.doc_id not in seen:
+                seen.append(hit.doc_id)
+        return seen

@@ -290,7 +290,7 @@ def generate_runbooks(
             "",
             "## Symptoms",
             "",
-            f"- Elevated {topic} reported on `{primary}`.",
+            f"- {topic[0].upper()}{topic[1:]} reported on `{primary}`.",
             "- Alert fired from the service SLO burn-rate monitor.",
             "- Customer-facing impact is possible if the condition persists beyond 15 minutes.",
             "",

@@ -93,6 +93,17 @@ var containers = [
   { name: 'idempotency', partitionKey: '/key', defaultTtl: 604800 }
   { name: 'sessions', partitionKey: '/session_id', defaultTtl: 86400 }
   { name: 'eval-runs', partitionKey: '/run_id', defaultTtl: -1 }
+  // -- reference data, loaded by scripts/seed.py (Phase 02) --------------------------------------
+  // Pre-created here, never by the seeder: container creation is a control-plane call and the
+  // operator holds only a data-plane role, so a seeder that tried would 403 (CLAUDE.md 7.9).
+  { name: 'services', partitionKey: '/service_id', defaultTtl: -1 }
+  { name: 'changes', partitionKey: '/service_id', defaultTtl: -1 }
+  { name: 'telemetry', partitionKey: '/service_id', defaultTtl: -1 }
+  { name: 'people', partitionKey: '/user_id', defaultTtl: -1 }
+  { name: 'entitlements', partitionKey: '/role', defaultTtl: -1 }
+  // Instruction versions, read per request so the v0/v1 switch is a data read, not a redeploy
+  // (CLAUDE.md 9.1). Created now so Phase 03 needs no provision.
+  { name: 'agent-instructions', partitionKey: '/agent', defaultTtl: -1 }
 ]
 
 resource cosmosContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2026-03-15' = [

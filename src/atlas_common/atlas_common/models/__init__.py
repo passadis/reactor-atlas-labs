@@ -6,7 +6,7 @@ harness all import from here, so a schema change is one edit and a type error ev
 
 from .catalogue import SLO, BlastRadius, Service
 from .incidents import Change, Incident, TelemetryWindow
-from .knowledge import KnowledgeDocument, RunbookFrontMatter
+from .knowledge import KnowledgeDocument, KnowledgeHit, KnowledgeResults, RunbookFrontMatter
 from .people import Entitlement, Person
 from .types import (
     Category,
@@ -30,6 +30,8 @@ __all__ = [
     "Environment",
     "Incident",
     "KnowledgeDocument",
+    "KnowledgeHit",
+    "KnowledgeResults",
     "Person",
     "PersonRole",
     "Risk",

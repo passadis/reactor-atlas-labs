@@ -187,3 +187,58 @@ looks like something else:
 | A resource looks wrong on stage | `make verify-phase01` prints 31 named checks in about 40 seconds. Do not debug in the portal in front of an audience. |
 | A 403 right after any provision | Role propagation, up to 5 minutes. Wait, re-run, then investigate. `postprovision.sh` already polls for Cosmos role propagation. |
 | `az role assignment list` shows 0 | Azure CLI 2.90.0 defect, not a real problem. Use the ARM REST call in `verify_phase01.sh`. |
+
+---
+
+## Phase 02 - Synthetic data and seeding
+
+**Built:** domain models, deterministic generators, the blast-radius walk, the seeder, typed async
+repositories, golden fixtures, `verify_phase02.sh`.
+
+### What to show (Episodes 1, 2 and 4)
+
+| Beat | Show | Say |
+|---|---|---|
+| Ep 2, code not judgement | `src/atlas_common/graph.py`, then `blast_radius("svc-checkout-api")` = 8 services | A graph walk has an exact answer. The impact agent calls this and explains it. It never computes it. |
+| Ep 1, the thread to pull | `ChangeRepository.recent("svc-payments", as_of=14:05)` returns exactly `CHG-2026-0873` | This is what the raw model call invents and the agent finds. |
+| Ep 4, XPIA | `data/seed/runbooks/RB-0029.md`, the "Customer note" block | This payload is in the knowledge base on purpose. |
+| Ep 1 or 4, retrieval is design | The chunking story in `docs/API-NOTES.md` 9.3 | One chunker decision meant the right runbook could not be retrieved. Retrieval quality is a design decision, not a model property. |
+
+### Commands
+
+```bash
+make seed               # generate + load Cosmos + AI Search (idempotent)
+make verify-phase02     # 14 checks, including a full re-seed that must change nothing
+make freeze-fixtures    # deliberate re-freeze; review the diff
+uv run python -m data.generators.generate_all --seed 20260914 --out data/seed
+```
+
+### Verified state
+
+| Entity | Count | Where |
+|---|---|---|
+| services | 25 | Cosmos |
+| incidents | 500 | Cosmos (`source: seed`) + search |
+| changes | 300 | Cosmos |
+| telemetry windows | 6,768 | Cosmos |
+| people / entitlements | 16 / 5 | Cosmos |
+| runbooks | 60 | search, one chunk each |
+| postmortems | 108 | search |
+| **search documents** | **668** | `idx-atlas-knowledge`, 3072-dim HNSW + semantic |
+
+Canonical query `checkout latency after payments deploy`, hybrid + semantic, scoped to runbooks:
+**RB-0042, RB-0031, RB-0056** (frozen in `tests/fixtures/knowledge_top3.json`).
+
+Frozen `blast_radius("svc-checkout-api", depth=3)`: admin-portal, analytics, loyalty,
+recommendations, reporting, reviews, search, status-page (8; no Tier 1 among them).
+`blast_radius("svc-payments")` reaches `svc-checkout-api` - the canonical narrative.
+
+`make verify-all`: Phase 01 31/31, Phase 02 14/14. Tests: 54, including 6 live integration tests.
+
+### Fallbacks
+
+| If this fails live | Do this |
+|---|---|
+| Search returns something odd for the canonical query | Scope to runbooks (`doc_type eq 'runbook'`); RB-0042 leads by 0.32 there. Unscoped it leads by 0.01. |
+| Seed data looks different from rehearsal | `uv run pytest tests/test_determinism.py` proves the committed seed equals a fresh generation. |
+| A 403 from Cosmos or Search | Role propagation; wait 5 minutes. `make verify-phase01` names the missing assignment. |

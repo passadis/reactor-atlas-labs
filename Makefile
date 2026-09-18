@@ -76,8 +76,17 @@ deploy: ## azd deploy all services (Phase 04)
 
 # ---------------------------------------------------------------- Phase 02 --
 .PHONY: seed
-seed: ## Generate and load the deterministic synthetic dataset (Phase 02)
-	$(call PENDING,Phase 02 - synthetic data)
+seed: ## Generate and load the deterministic synthetic dataset into Cosmos and AI Search
+	$(PY) -m data.generators.generate_all --seed 20260914 --out data/seed
+	$(PY) -m scripts.seed
+
+.PHONY: verify-phase02
+verify-phase02: ## Verify seeded Cosmos + AI Search against the deployed environment
+	bash scripts/verify_phase02.sh
+
+.PHONY: freeze-fixtures
+freeze-fixtures: ## Re-freeze golden fixtures (deliberate act; review the diff)
+	$(PY) -m scripts.freeze_fixtures
 
 # ---------------------------------------------------------------- Phase 12 --
 .PHONY: eval

@@ -1,0 +1,16 @@
+{
+  "expected": {
+    "category": "latency",
+    "must_cite": [
+      "RB-0042"
+    ],
+    "primary_service": "svc-checkout-api",
+    "severity": "Sev2",
+    "suspected_cause_service": "svc-payments",
+    "suspected_change_ids": [
+      "CHG-2026-0873"
+    ]
+  },
+  "incident_at": "2026-09-01T14:05:00Z",
+  "prompt": "Checkout is timing out for about 20% of EU customers since 14:05, started right after the payments deploy."
+}
