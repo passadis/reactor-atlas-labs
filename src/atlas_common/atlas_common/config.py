@@ -60,6 +60,10 @@ class Settings:
     knowledge_index: str = KNOWLEDGE_INDEX
     ops_now: datetime = datetime(2026, 9, 1, 14, 20, tzinfo=UTC)
     instructions_version: str = INSTRUCTIONS_VERSION
+    # gpt-5.4 reasoning effort for the interactive agent. Measured 2026-09-19 on the canonical
+    # incident: "none" 13.7-15.9 s, default 19.7-20.9 s, identical triage quality and identical
+    # injection handling (docs/API-NOTES.md 11). Empty string = model default.
+    reasoning_effort: str = "none"
 
     @property
     def foundry_openai_base_url(self) -> str:
@@ -88,4 +92,5 @@ class Settings:
                 os.environ.get("ATLAS_OPS_NOW", DEFAULT_OPS_NOW).replace("Z", "+00:00")
             ),
             instructions_version=os.environ.get("ATLAS_INSTRUCTIONS_VERSION", INSTRUCTIONS_VERSION),
+            reasoning_effort=os.environ.get("ATLAS_REASONING_EFFORT", "none").strip(),
         )

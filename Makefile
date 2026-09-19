@@ -28,7 +28,7 @@ help: ## Show this help
 # ---------------------------------------------------------------- Phase 00 --
 .PHONY: install
 install: ## Sync the uv workspace (all groups)
-	$(UV) sync --python 3.13 --group dev --group evals
+	$(UV) sync --python 3.13 --group dev --group evals --group ui
 
 .PHONY: lint
 lint: ## ruff check + mypy strict on src/
@@ -71,8 +71,8 @@ app-registrations: ## Create or update the three Entra app registrations
 	bash scripts/create_app_registrations.sh
 
 .PHONY: deploy
-deploy: ## azd deploy all services (Phase 04)
-	$(call PENDING,Phase 04 - web app)
+deploy: ## azd deploy the services built so far (web; more join in Phases 06-10)
+	azd deploy web --no-prompt
 
 # ---------------------------------------------------------------- Phase 02 --
 .PHONY: seed
@@ -104,6 +104,23 @@ prompt-agent: ## Create or update the Foundry prompt agent atlas-triage-prompt (
 .PHONY: verify-phase03
 verify-phase03: ## Verify the incident agent, prompt agent, guardrails and tracing against Azure
 	bash scripts/verify_phase03.sh
+
+# ---------------------------------------------------------------- Phase 04 --
+.PHONY: web-local
+web-local: ## Run the web app locally with the auth bypass (refused in Azure)
+	ATLAS_DEMO_AUTH_BYPASS=true $(UV) run uvicorn atlas_web.app:app --port 8000 --reload
+
+.PHONY: sse-probe
+sse-probe: ## Drive the deployed web app over SSE with a real Entra token; print timings
+	$(PY) -m scripts.sse_probe --follow-up "Is the service that caused this under a change freeze, and which team owns it?"
+
+.PHONY: screenshots
+screenshots: ## Capture fallback-deck screenshots of the deployed app into docs/assets
+	$(PY) -m scripts.capture_screenshots
+
+.PHONY: verify-phase04
+verify-phase04: ## Verify the deployed web app: auth, health, SSE, cancellation, tracing
+	bash scripts/verify_phase04.sh
 
 # ---------------------------------------------------------------- Phase 12 --
 .PHONY: eval

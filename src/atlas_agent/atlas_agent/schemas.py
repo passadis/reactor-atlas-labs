@@ -54,6 +54,10 @@ class TriageFailure(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["triage_failure"] = "triage_failure"
-    reason: Literal["invalid_output", "model_unavailable", "content_filtered", "timeout"]
+    reason: Literal[
+        "invalid_output", "model_unavailable", "content_filtered", "timeout", "throttled"
+    ]
     detail: str
     attempts: int
+    # Seconds the model endpoint asked us to wait (429), so a UI can count down instead of failing.
+    retry_after: int | None = None

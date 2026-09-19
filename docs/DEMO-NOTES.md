@@ -307,3 +307,69 @@ make verify-phase03      # 20 checks against live resources, about 2.5 minutes
 | Cosmos unreachable | Instructions fall back to the packaged copy (`source=packaged` in the header line). Tools return "I could not reach the ...". |
 | Prompt agent tool error in the portal | Show the definition (instructions, tool, guardrail) instead of running it; beat 2 already proved grounding. |
 | Trace not visible yet | Ingestion takes 1-3 minutes. Show a trace id from rehearsal. |
+
+## Phase 04 - The web app (Episode 1 stage, every episode's face)
+
+`https://ca-atlas-web-mkruniv7.bluebay-ec2ff390.eastus2.azurecontainerapps.io` - Container Apps,
+2 replicas minimum, Entra sign-in (built-in auth, no client secret), streaming over SSE.
+
+### What to show
+
+| Beat | Do | The room sees | Say |
+|---|---|---|---|
+| The four shapes | Header switch: Model call, Prompt agent, Hosted agent, This app. Same question each time. | Model call invents; prompt agent finds RB-0042 but no change; This app finds CHG-2026-0873 with 9 tool calls. Hosted agent says "not deployed yet - arrives in Phase 05" until it is, then lights up with no redeploy. | One question, four hosting shapes, one screen. |
+| The activity panel | Send the canonical report in "This app" | Each tool as it runs: `lookup_service 6 ms ok`, `search_knowledge 300 ms ok`... then the Sev2 card with citations that link to the knowledge page. | Every number on the card came from a line on the right. |
+| Show the contract | Tick "Show the contract" | The raw validated `IncidentTriage` JSON next to the card. | This is what the next component receives - not prose. |
+| v0 vs v1 | Instructions selector | Same report, the other instruction version, read from Cosmos per request. | Changing the agent's instructions is a data change. No deploy. |
+| Follow-up | "Is the service that caused this under a change freeze, and which team owns it?" | Streamed prose: svc-payments, frozen, team-payments. | It resolved "the service that caused this" from the conversation. |
+| Persona | "act as readonly" in the header | The persona pill changes; Approvals shows no buttons, and the API refuses. | The UI hides the button; the server refuses the call. Both. |
+| Trace | Click the trace id in the activity panel | Application Insights transaction for that turn. | Correlation from the browser turn inward. |
+| Scope | `?scope=ep1` ... `?scope=full` | Panels appear and disappear; nothing reloads. | Scope is a view filter. The system underneath is always complete. |
+
+### Measured (deployed, eastus2, 2026-09-19)
+
+| Metric | Value |
+|---|---|
+| First streamed event (tool start), warm | 1.3-2.3 s (target < 3 s) |
+| Full canonical triage, warm | median 12.7 s, range 11.6-15.0 s (target < 15 s) |
+| Full canonical triage, cold (first after deploy) | 13.9 s |
+| Cosmos tool calls | 5-20 ms each |
+| Knowledge search (embed + hybrid) | about 0.3 s |
+| Follow-up answer | 3-5 s |
+
+What moved the numbers: `reasoning.effort = "none"` (20 s to 14 s, same quality) and capping
+`reasoning_notes` at 60 words (a data change to v1; 14-16 s to 12.7 s median). API-NOTES 11.4.
+
+### Commands
+
+```bash
+make deploy              # azd deploy web (the only control-plane step; never during a session)
+make verify-phase04      # 20 checks against the public URL, through Entra, about 3 minutes
+make sse-probe           # one canonical triage + follow-up, timings as JSON
+make screenshots         # docs/assets/phase04-*.png from the deployed app (headless Edge)
+make web-local           # local run with the auth bypass (refused in Azure)
+```
+
+### Screenshots (fallback deck)
+
+`docs/assets/phase04-01-console-empty.png` to `phase04-10-approvals.png`: empty console, triage
+with activity panel, activity panel alone, contract view, follow-up, model call, prompt agent,
+scope=full, knowledge page RB-0042, approvals console.
+
+### Fallbacks
+
+| If this fails live | Do this |
+|---|---|
+| Sign-in loop or 401 | Open `/.auth/logout`, sign in again. Check `/api/me` in a second tab. |
+| A triage hangs | Stop button (it cancels the model run server-side), then send again. Every run has a 150 s hard ceiling. |
+| Model throttled (429) | The banner counts down the retry; wait it out, or switch to the prompt-agent shape. |
+| Web app down | `curl <url>/api/health`; if dependencies are fine, show `make sse-probe` output and the screenshots. |
+| Hosted agent shape before Phase 05 | It says "not deployed yet" by design. Do not click it on stage until Phase 05 is live. |
+
+### Two things the platform taught us (worth saying on stage)
+
+- Container Apps ingress does not tell the app that a streaming client went away, so "close the tab"
+  cannot cancel through the socket. The page sends an explicit cancel beacon. Real systems need
+  this.
+- The first measurement said "every tool took 3 seconds". They ran in parallel; the stream reports
+  the batch. A small piece of middleware now times each tool on its own.

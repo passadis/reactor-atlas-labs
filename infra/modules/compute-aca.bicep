@@ -51,8 +51,33 @@ param serviceBusNamespaceName string
 param commandsQueueName string
 param storageBlobEndpoint string
 
+@description('azd environment name, surfaced to telemetry as deployment.environment.')
+param azdEnvironmentName string
+
+@description('Foundry account name; Settings derives the OpenAI v1 and vectorizer URLs from it.')
+param foundryAccountName string
+
+@description('Application Insights resource id, for trace deep links in the UI.')
+param appInsightsId string
+
+@description('atlas-web app registration client id. Empty disables built-in auth (never in a demo env).')
+param webAppClientId string = ''
+
+@description('Entra tenant for the sign-in issuer.')
+param tenantId string = tenant().tenantId
+
 @description('Placeholder image used until azd deploy pushes the real one.')
 param placeholderImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
+
+// The image azd last deployed for each service (SERVICE_<NAME>_IMAGE_NAME in the azd env). Without
+// these, every `azd provision` would reset a running app to the placeholder until the next deploy,
+// which breaks provision idempotency and would take the demo down in the T-10 routine.
+@description('Last deployed web image; empty until the first azd deploy.')
+param webImage string = ''
+@description('Last deployed orchestrator image; empty until the first azd deploy.')
+param orchestratorImage string = ''
+@description('Last deployed worker image; empty until the first azd deploy.')
+param workerImage string = ''
 
 // ACR names: alphanumeric only, no hyphens.
 var acrName = take('${abbrs.containerRegistryRegistry}atlas${resourceToken}', 50)
@@ -72,6 +97,8 @@ var commonEnv = [
   { name: 'FOUNDRY_MODEL_DEPLOYMENT', value: foundryModelDeployment }
   { name: 'ATLAS_SERVICEBUS_FQDN', value: serviceBusFqdn }
   { name: 'OTEL_SERVICE_NAMESPACE', value: 'atlas' }
+  { name: 'ATLAS_FOUNDRY_ACCOUNT_NAME', value: foundryAccountName }
+  { name: 'AZURE_ENV_NAME', value: azdEnvironmentName }
 ]
 
 // ---------------------------------------------------------------------------- registry --
@@ -183,7 +210,12 @@ resource webApp 'Microsoft.App/containerApps@2026-01-01' = {
         targetPort: 8000
         transport: 'auto'
         allowInsecure: false
-        // SSE streams are long-lived; the default 240s would cut a slow triage off mid-answer.
+        // SSE streams are long-lived; the app sends a keepalive every 15 s so idle timeouts never
+        // cut a slow triage off. Sticky sessions keep a browser on one replica; turns live in
+        // Cosmos anyway, so a replica change mid-conversation is still safe.
+        stickySessions: {
+          affinity: 'sticky'
+        }
         traffic: [
           {
             latestRevision: true
@@ -202,7 +234,7 @@ resource webApp 'Microsoft.App/containerApps@2026-01-01' = {
       containers: [
         {
           name: 'web'
-          image: placeholderImage
+          image: empty(webImage) ? placeholderImage : webImage
           resources: {
             cpu: json('1.0')
             memory: '2Gi'
@@ -211,7 +243,31 @@ resource webApp 'Microsoft.App/containerApps@2026-01-01' = {
             { name: 'AZURE_CLIENT_ID', value: webIdentityClientId }
             { name: 'OTEL_SERVICE_NAME', value: 'atlas-web' }
             { name: 'ATLAS_ORCHESTRATOR_URL', value: 'https://${orchestratorAppName}.internal.${acaEnv.properties.defaultDomain}' }
+            { name: 'ATLAS_APPINSIGHTS_ID', value: appInsightsId }
           ])
+          // Liveness and readiness use /api/live, which checks nothing downstream: a Cosmos blip
+          // must degrade the page, not pull every replica out of rotation. /api/health is the
+          // dependency probe for humans and verify scripts.
+          probes: [
+            {
+              type: 'Liveness'
+              httpGet: { path: '/api/live', port: 8000 }
+              periodSeconds: 15
+              failureThreshold: 4
+            }
+            {
+              type: 'Readiness'
+              httpGet: { path: '/api/live', port: 8000 }
+              periodSeconds: 10
+              failureThreshold: 3
+            }
+            {
+              type: 'Startup'
+              httpGet: { path: '/api/live', port: 8000 }
+              periodSeconds: 5
+              failureThreshold: 24
+            }
+          ]
         }
       ]
       // Min 2: never cold-start during a demo.
@@ -222,6 +278,46 @@ resource webApp 'Microsoft.App/containerApps@2026-01-01' = {
     }
   }
   dependsOn: [acrPull]
+}
+
+// Built-in authentication (Easy Auth) with Microsoft Entra ID. No client secret: without one the
+// platform uses the implicit flow and returns an ID token, which is all the UI needs (sign-in plus
+// the `roles` claim). Bearer tokens for the atlas-web API (verify scripts, sse_probe) are accepted
+// through allowedAudiences. Health and liveness are the only anonymous paths.
+resource webAuth 'Microsoft.App/containerApps/authConfigs@2026-01-01' = if (!empty(webAppClientId)) {
+  parent: webApp
+  name: 'current'
+  properties: {
+    platform: {
+      enabled: true
+    }
+    globalValidation: {
+      unauthenticatedClientAction: 'RedirectToLoginPage'
+      redirectToProvider: 'azureactivedirectory'
+      excludedPaths: [
+        '/api/health'
+        '/api/live'
+      ]
+    }
+    identityProviders: {
+      azureActiveDirectory: {
+        enabled: true
+        registration: {
+          clientId: webAppClientId
+          openIdIssuer: '${environment().authentication.loginEndpoint}${tenantId}/v2.0'
+        }
+        validation: {
+          allowedAudiences: [
+            webAppClientId
+            'api://atlas-web'
+          ]
+        }
+      }
+    }
+    httpSettings: {
+      requireHttps: true
+    }
+  }
 }
 
 resource orchestratorApp 'Microsoft.App/containerApps@2026-01-01' = {
@@ -264,7 +360,7 @@ resource orchestratorApp 'Microsoft.App/containerApps@2026-01-01' = {
       containers: [
         {
           name: 'orchestrator'
-          image: placeholderImage
+          image: empty(orchestratorImage) ? placeholderImage : orchestratorImage
           resources: {
             cpu: json('2.0')
             memory: '4Gi'
@@ -313,7 +409,7 @@ resource workerApp 'Microsoft.App/containerApps@2026-01-01' = {
       containers: [
         {
           name: 'worker'
-          image: placeholderImage
+          image: empty(workerImage) ? placeholderImage : workerImage
           resources: {
             cpu: json('1.0')
             memory: '2Gi'

@@ -66,10 +66,24 @@ def configure_telemetry(service_name: str, *, service_version: str | None = None
 
     for name in _QUIET_LOGGERS:
         logging.getLogger(name).setLevel(logging.WARNING)
+    # Console logs too: Container Apps log streaming and local runs read stdout/stderr, and the
+    # Azure Monitor handler on the `atlas` logger would otherwise swallow them.
+    if not logging.getLogger().handlers:
+        logging.basicConfig(
+            level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
+        )
 
     connection_string = os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING", "").strip()
     if not connection_string:
         _log.warning("APPLICATIONINSIGHTS_CONNECTION_STRING not set: traces are not exported")
+        # Still install a real provider: spans must be valid for `traceparent` to propagate,
+        # exported or not. The correlation id is an invariant, the exporter is not.
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+
+        trace.set_tracer_provider(
+            TracerProvider(resource=Resource.create({"service.name": service_name}))
+        )
     else:
         try:
             from agent_framework.observability import create_resource

@@ -19,6 +19,10 @@
     "embedModelName": { "value": "${ATLAS_EMBED_MODEL=text-embedding-3-large}" },
     "embedModelVersion": { "value": "${ATLAS_EMBED_VERSION=1}" },
     "embedCapacity": { "value": "${ATLAS_EMBED_CAPACITY=120}" },
-    "enableSemanticCache": { "value": "${ATLAS_ENABLE_SEMANTIC_CACHE=false}" }
+    "enableSemanticCache": { "value": "${ATLAS_ENABLE_SEMANTIC_CACHE=false}" },
+    "webAppClientId": { "value": "${ATLAS_WEB_APP_CLIENT_ID=}" },
+    "webImage": { "value": "${SERVICE_WEB_IMAGE_NAME=}" },
+    "orchestratorImage": { "value": "${SERVICE_ORCHESTRATOR_IMAGE_NAME=}" },
+    "workerImage": { "value": "${SERVICE_WORKER_IMAGE_NAME=}" }
   }
 }

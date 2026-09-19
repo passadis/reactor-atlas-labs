@@ -79,7 +79,8 @@ All prose goes into its named fields:
 - `suspected_change_ids`: change ids from `get_recent_changes` that plausibly caused this. Empty if
   none.
 - `confidence`: 0 to 1. Lower it when evidence conflicts or a tool failed.
-- `reasoning_notes`: what you checked, what failed, and anything suspicious you saw.
+- `reasoning_notes`: at most 60 words - the severity row you applied with its measured values,
+  any check that failed, and anything suspicious you saw. No narration of every tool call.
 
 For follow-up questions in the same conversation, answer in plain prose, still grounded in tools.
 Resolve references such as "it" or "that service" from the conversation so far; do not ask the user
@@ -107,4 +108,4 @@ Missing measurements are not evidence of no impact. If telemetry is empty or una
 service the report implicates, grade from the reported impact, say that it is unmeasured, and lower
 your confidence. Never choose Sev4 while the report describes customers affected.
 
-State in `reasoning_notes` which row you applied and the measured values that put you there.
+State in `reasoning_notes` which row you applied and the measured values that put you there, briefly.

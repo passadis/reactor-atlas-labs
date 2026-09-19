@@ -42,6 +42,11 @@ dev = [
     "faker==40.39.0",
     "pyyaml==6.0.3",
 ]
+# Phase 04 fallback-deck screenshots. Drives the locally installed Edge (channel="msedge"), so no
+# browser download. Not needed by CI or any service image.
+ui = [
+    "playwright==1.63.0",
+]
 # Phase 12. azure-ai-evaluation carries the AI Red Teaming Agent (eastus2 / northcentralus only).
 evals = [
     "azure-ai-projects==2.6.1",

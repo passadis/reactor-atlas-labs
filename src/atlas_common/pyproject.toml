@@ -14,6 +14,9 @@ dependencies = [
     "pydantic==2.13.5",
     "python-dotenv==1.2.3",
     "httpx==0.28.1",
+    # Imported directly (embeddings, async Azure clients); pinned rather than left transitive.
+    "openai==3.14.0",
+    "aiohttp==3.14.3",
 ]
 
 [build-system]

@@ -66,6 +66,7 @@ def build_incident_agent(
     client: FoundryChatClient,
     instructions: str,
     tools: Sequence[FunctionTool],
+    reasoning_effort: str = "",
 ) -> Agent:
     """Construct the incident agent. Cheap: no I/O, safe to call per request.
 
@@ -78,8 +79,15 @@ def build_incident_agent(
         description="Contoso Cloud Operations incident triage agent.",
         instructions=instructions,
         tools=list(tools),
-        default_options={"store": False},
+        default_options=_default_options(reasoning_effort),
     )
+
+
+def _default_options(reasoning_effort: str) -> Any:
+    options: dict[str, Any] = {"store": False}
+    if reasoning_effort:
+        options["reasoning"] = {"effort": reasoning_effort}
+    return options
 
 
 @dataclass
@@ -111,7 +119,7 @@ def _usage(response: AgentResponse) -> tuple[int | None, int | None]:
 
 OnUpdate = Callable[[AgentResponseUpdate], None]
 
-FailureReason = Literal["content_filtered", "model_unavailable"]
+FailureReason = Literal["content_filtered", "model_unavailable", "throttled"]
 
 
 def model_failure_reason(exc: BaseException) -> FailureReason | None:
@@ -133,6 +141,8 @@ def model_failure_reason(exc: BaseException) -> FailureReason | None:
             body = current.body if isinstance(current.body, dict) else {}
             if current.code == "content_filter" or body.get("code") == "content_filter":
                 return "content_filtered"
+            if current.status_code == 429:
+                return "throttled"
             return "model_unavailable"
         if isinstance(current, ChatClientException):
             return "model_unavailable"
@@ -140,14 +150,35 @@ def model_failure_reason(exc: BaseException) -> FailureReason | None:
     return None
 
 
+def retry_after_seconds(exc: BaseException) -> int | None:
+    """The `Retry-After` a throttled model call asked for, from anywhere in the cause chain."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, APIStatusError) and current.status_code == 429:
+            header = current.response.headers.get("retry-after")
+            try:
+                return max(1, int(float(header))) if header else 10
+            except ValueError:
+                return 10
+        current = current.__cause__ or current.__context__
+    return None
+
+
 async def _run(
-    agent: Agent, prompt: str, session: AgentSession, on_update: OnUpdate | None
+    agent: Agent,
+    prompt: str,
+    session: AgentSession,
+    on_update: OnUpdate | None,
+    middleware: Sequence[Any] | None = None,
 ) -> AgentResponse:
     """One structured run, streamed through `on_update` when a caller wants live events."""
     options: Any = {"response_format": IncidentTriage}
+    mw: Any = list(middleware) if middleware else None
     if on_update is None:
-        return await agent.run(prompt, session=session, options=options)
-    stream = agent.run(prompt, session=session, options=options, stream=True)
+        return await agent.run(prompt, session=session, options=options, middleware=mw)
+    stream = agent.run(prompt, session=session, options=options, stream=True, middleware=mw)
     async for update in stream:
         on_update(update)
     return await stream.get_final_response()
@@ -158,6 +189,7 @@ async def triage(
     report: str,
     session: AgentSession,
     on_update: OnUpdate | None = None,
+    middleware: Sequence[Any] | None = None,
 ) -> TriageResult:
     """Run one structured triage: validate, retry once on invalid output, else typed failure.
 
@@ -170,7 +202,7 @@ async def triage(
     for attempt in (1, 2):
         try:
             async with asyncio.timeout(TRIAGE_TIMEOUT_S):
-                response = await _run(agent, prompt, session, on_update)
+                response = await _run(agent, prompt, session, on_update, middleware)
         except TimeoutError:
             return TriageResult(
                 TriageFailure(reason="timeout", detail="triage exceeded its time budget",
@@ -182,7 +214,8 @@ async def triage(
             if reason is None:
                 raise
             return TriageResult(
-                TriageFailure(reason=reason, detail=type(exc).__name__, attempts=attempt),
+                TriageFailure(reason=reason, detail=type(exc).__name__, attempts=attempt,
+                              retry_after=retry_after_seconds(exc)),
                 attempt, tool_calls,
             )
 
@@ -229,6 +262,7 @@ DEGRADED_MESSAGES: dict[str, str] = {
     "policy. I can help triage an incident instead.",
     "model_unavailable": "I could not reach the language model. Please try again in a moment.",
     "timeout": "That took longer than my time budget, so I stopped. Try a narrower question.",
+    "throttled": "The model is busy right now. I will be able to answer again shortly.",
 }
 
 
@@ -239,6 +273,7 @@ class ChatTurn:
     text: str
     tool_calls: list[str] = field(default_factory=list)
     failure: str | None = None
+    retry_after: int | None = None
 
 
 async def answer(
@@ -246,14 +281,16 @@ async def answer(
     question: str,
     session: AgentSession,
     on_update: OnUpdate | None = None,
+    middleware: Sequence[Any] | None = None,
 ) -> ChatTurn:
     """One free-text turn in an existing conversation, with the same failure contract as triage."""
     try:
         async with asyncio.timeout(ANSWER_TIMEOUT_S):
+            mw: Any = list(middleware) if middleware else None
             if on_update is None:
-                response = await agent.run(question, session=session)
+                response = await agent.run(question, session=session, middleware=mw)
             else:
-                stream = agent.run(question, session=session, stream=True)
+                stream = agent.run(question, session=session, stream=True, middleware=mw)
                 async for update in stream:
                     on_update(update)
                 response = await stream.get_final_response()
@@ -263,7 +300,8 @@ async def answer(
         reason = model_failure_reason(exc)
         if reason is None:
             raise
-        return ChatTurn(DEGRADED_MESSAGES[reason], failure=reason)
+        return ChatTurn(DEGRADED_MESSAGES[reason], failure=reason,
+                        retry_after=retry_after_seconds(exc))
     return ChatTurn(response.text, _tool_calls(response))
 
 
@@ -288,7 +326,10 @@ class IncidentAgentRuntime:
         loaded = await self.instructions.load(version)
         now = self.settings.ops_now.strftime("%Y-%m-%d %H:%M UTC")
         agent = build_incident_agent(
-            self.client, loaded.render(now=now), self.tools.as_agent_tools()
+            self.client,
+            loaded.render(now=now),
+            self.tools.as_agent_tools(),
+            reasoning_effort=self.settings.reasoning_effort,
         )
         return agent, loaded
 

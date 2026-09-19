@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ATLAS knowledge</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="top"><div class="brand"><a class="logo" href="/">ATLAS</a><span class="sub">Knowledge</span></div></header>
+  <div class="page">
+    <div class="card" id="doc"><p class="muted">Loading...</p></div>
+  </div>
+  <script>
+    "use strict";
+    const esc = (t) => { const d = document.createElement("div"); d.textContent = t == null ? "" : String(t); return d.innerHTML; };
+    const id = decodeURIComponent(location.pathname.split("/").pop());
+    fetch(`/api/kb/${encodeURIComponent(id)}`).then(async (r) => {
+      const el = document.getElementById("doc");
+      if (!r.ok) { el.innerHTML = `<p>No document ${esc(id)}.</p>`; return; }
+      const d = await r.json();
+      document.title = `${d.doc_id} - ATLAS`;
+      el.innerHTML = `
+        <h1>${esc(d.title)}</h1>
+        <p><span class="chip">${esc(d.doc_type)}</span>
+           ${(d.services || []).map((s) => `<span class="chip">${esc(s)}</span>`).join(" ")}
+           ${d.risk ? `<span class="chip">risk ${esc(d.risk)}</span>` : ""}
+           ${d.last_reviewed ? `<span class="chip">reviewed ${esc(d.last_reviewed)}</span>` : ""}
+           ${d.owner_team ? `<span class="chip">${esc(d.owner_team)}</span>` : ""}</p>
+        <div class="kbtext">${esc(d.text)}</div>`;
+    }).catch(() => { document.getElementById("doc").innerHTML = "<p>I could not reach the knowledge base.</p>"; });
+  </script>
+</body>
+</html>

@@ -139,3 +139,15 @@ class EntitlementRepository:
             partition_key=user_id,
         )
         return to_model(Person, rows[0]) if rows else None
+
+    async def person_by_email(self, email: str) -> Person | None:
+        rows = await self._store.query(
+            "people",
+            "SELECT * FROM c WHERE LOWER(c.email) = @email",
+            [{"name": "@email", "value": email.lower()}],
+        )
+        return to_model(Person, rows[0]) if rows else None
+
+    async def people(self) -> list[Person]:
+        rows = await self._store.query("people", "SELECT * FROM c")
+        return [to_model(Person, r) for r in rows]

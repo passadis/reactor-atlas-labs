@@ -30,6 +30,9 @@ services:
     host: containerapp
     language: py
     docker:
+      # Context is the repo root: the image installs the uv workspace (atlas-common, atlas-agent).
+      path: ./Dockerfile
+      context: ../..
       remoteBuild: true
 
   orchestrator:

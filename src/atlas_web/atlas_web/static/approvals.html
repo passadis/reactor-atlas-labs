@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ATLAS approvals</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><a class="logo" href="/">ATLAS</a><span class="sub">Approval console</span></div>
+    <div class="controls"><div class="persona"><span id="who">...</span>
+      <label class="actas"><input type="checkbox" id="actas"> act as readonly</label></div></div>
+  </header>
+  <div id="banner" class="banner" hidden></div>
+  <div class="page">
+    <p class="muted">Plans awaiting approval. Buttons are hidden when your role and persona may not approve,
+      and the API refuses the call regardless (checked server side, never by a model).</p>
+    <div id="list"><p class="muted">Loading...</p></div>
+  </div>
+  <script>
+    "use strict";
+    const esc = (t) => { const d = document.createElement("div"); d.textContent = t == null ? "" : String(t); return d.innerHTML; };
+    const actAs = () => sessionStorage.getItem("atlas.actas") === "readonly";
+    const hdrs = () => Object.assign({ "Content-Type": "application/json" }, actAs() ? { "x-atlas-act-as": "readonly" } : {});
+    function banner(t, bad) { const b = document.getElementById("banner"); b.hidden = !t; b.className = "banner" + (bad ? " bad" : ""); b.textContent = t || ""; }
+
+    async function load() {
+      const me = await fetch("/api/me", { headers: hdrs() }).then((r) => r.json()).catch(() => null);
+      document.getElementById("who").textContent = me ? `${me.name} as ${me.persona.display_name || me.persona.role} (${me.persona.role})` : "not signed in";
+      const r = await fetch("/api/approvals", { headers: hdrs() });
+      const list = document.getElementById("list");
+      if (!r.ok) { list.innerHTML = "<p>I could not load the approval queue.</p>"; return; }
+      const { pending } = await r.json();
+      if (!pending.length) { list.innerHTML = '<div class="card muted">No plans are awaiting approval.</div>'; return; }
+      list.innerHTML = pending.map((c) => `
+        <div class="card">
+          <h3>${esc(c.case_id)} <span class="badge ${esc(c.severity)}">${esc(c.severity)}</span></h3>
+          <p>${esc(c.title)}</p>
+          <p><span class="chip">risk ${esc(c.plan.risk)}</span> <span class="chip">Tier ${esc(c.plan.tier)}</span>
+             <span class="chip">blast radius ${esc(c.plan.blast_radius)}</span></p>
+          ${c.decision.allowed
+            ? `<button data-case="${esc(c.case_id)}" data-d="approve">Approve</button>
+               <button data-case="${esc(c.case_id)}" data-d="reject" class="ghost">Reject</button>`
+            : `<p class="muted">You may not approve this: ${esc(c.decision.reason)}</p>`}
+        </div>`).join("");
+    }
+    document.addEventListener("click", async (e) => {
+      const b = e.target.closest("button[data-case]");
+      if (!b) return;
+      const reason = prompt(`Reason to ${b.dataset.d} ${b.dataset.case}:`);
+      if (!reason) return;
+      const r = await fetch(`/api/approvals/${encodeURIComponent(b.dataset.case)}`, {
+        method: "POST", headers: hdrs(), body: JSON.stringify({ decision: b.dataset.d, reason }) });
+      const body = await r.json().catch(() => ({}));
+      banner(r.ok ? `${b.dataset.case}: ${body.status}` : `Refused: ${body.detail || r.status}`, !r.ok);
+      load();
+    });
+    document.getElementById("actas").checked = actAs();
+    document.getElementById("actas").addEventListener("change", (e) => {
+      sessionStorage.setItem("atlas.actas", e.target.checked ? "readonly" : ""); load(); });
+    load();
+  </script>
+</body>
+</html>

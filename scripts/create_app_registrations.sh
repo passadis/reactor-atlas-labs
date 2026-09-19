@@ -145,6 +145,69 @@ WEB_APP_ID="$(ensure_app 'atlas-web' '-' "$TMP/web-roles.json" | tail -1)"
 GATEWAY_APP_ID="$(ensure_app 'atlas-gateway' 'api://atlas-gateway' "$TMP/gateway-roles.json" | tail -1)"
 OPSAPI_APP_ID="$(ensure_app 'atlas-ops-api' 'api://atlas-ops-api' '-' | tail -1)"
 
+# ---------------------------------------------------------------- atlas-web sign-in (Phase 04) --
+# Container Apps built-in auth with NO client secret: the platform uses the implicit flow and asks
+# Entra for an ID token, so the registration must allow ID tokens and list the Easy Auth callback.
+# The web app also accepts bearer tokens for its own API, which is how verify_phase04 and
+# sse_probe call it as a real signed-in user: the Azure CLI is pre-authorized for one delegated
+# scope, so `az account get-access-token --scope api://atlas-web/user_impersonation` just works.
+SCOPE_WEB_USER="a5d6e7f8-4f30-4192-be6d-55a4ebc8f745"
+AZURE_CLI_APP_ID="04b07795-8ddb-461a-bbee-02f9e1bf7b46"
+
+configure_web_signin() {
+  local appId="$1" web_url objId callback
+  web_url="$(azd env get-value ATLAS_WEB_URL 2>/dev/null || true)"
+  objId="$(az ad app show --id "$appId" --query id -o tsv 2>/dev/null)"
+  if [ -z "$web_url" ] || [ -z "$objId" ]; then
+    say "  WARN: ATLAS_WEB_URL not in azd env yet; run after azd provision"
+    return 0
+  fi
+  callback="${web_url%/}/.auth/login/aad/callback"
+  local graph="https://graph.microsoft.com/v1.0/applications/${objId}"
+
+  az rest --method PATCH --url "$graph" --headers "Content-Type=application/json" --body "{
+    \"web\": {\"redirectUris\": [\"${callback}\"],
+             \"implicitGrantSettings\": {\"enableIdTokenIssuance\": true}},
+    \"api\": {\"requestedAccessTokenVersion\": 2,
+             \"oauth2PermissionScopes\": [{\"id\": \"${SCOPE_WEB_USER}\", \"value\": \"user_impersonation\",
+               \"type\": \"User\", \"isEnabled\": true,
+               \"adminConsentDisplayName\": \"Use ATLAS\", \"adminConsentDescription\": \"Use ATLAS as the signed-in user\",
+               \"userConsentDisplayName\": \"Use ATLAS\", \"userConsentDescription\": \"Use ATLAS as you\"}]}
+  }" >/dev/null 2>&1 && say "  sign-in: callback ${callback}, ID tokens on, scope user_impersonation" \
+    || { say "  ERROR configuring atlas-web sign-in"; return 1; }
+  sleep 3
+  az ad app update --id "$appId" --identifier-uris "api://atlas-web" >/dev/null 2>&1 \
+    && say "  identifier uri api://atlas-web" || say "  WARN: identifier uri not set"
+  az rest --method PATCH --url "$graph" --headers "Content-Type=application/json" --body "{
+    \"api\": {\"preAuthorizedApplications\": [{\"appId\": \"${AZURE_CLI_APP_ID}\",
+              \"delegatedPermissionIds\": [\"${SCOPE_WEB_USER}\"]}]}
+  }" >/dev/null 2>&1 && say "  Azure CLI pre-authorized for user_impersonation" \
+    || say "  WARN: could not pre-authorize the Azure CLI"
+
+  # The presenter signs in as themselves; give that account the Engineer and Approver roles.
+  # (The readonly persona is reached by "act as readonly" in the UI, which only narrows.)
+  local spId userId role
+  spId="$(az ad sp show --id "$appId" --query id -o tsv 2>/dev/null)"
+  userId="$(az ad signed-in-user show --query id -o tsv 2>/dev/null)"
+  if [ -n "$spId" ] && [ -n "$userId" ]; then
+    for role in "$ROLE_ENGINEER" "$ROLE_APPROVER"; do
+      if az rest --method GET --url "https://graph.microsoft.com/v1.0/servicePrincipals/${spId}/appRoleAssignedTo" \
+          --query "value[?principalId=='${userId}' && appRoleId=='${role}'] | length(@)" -o tsv 2>/dev/null | grep -q '^1$'; then
+        say "  operator already holds role ${role}"
+      else
+        az rest --method POST --url "https://graph.microsoft.com/v1.0/servicePrincipals/${spId}/appRoleAssignedTo" \
+          --headers "Content-Type=application/json" \
+          --body "{\"principalId\": \"${userId}\", \"resourceId\": \"${spId}\", \"appRoleId\": \"${role}\"}" \
+          >/dev/null 2>&1 && say "  operator assigned role ${role}" || say "  WARN: could not assign role ${role}"
+      fi
+    done
+  fi
+}
+
+if [ "$SHOW_ONLY" != "1" ] && [ -n "${WEB_APP_ID:-}" ]; then
+  configure_web_signin "$WEB_APP_ID"
+fi
+
 echo
 echo "RESULT"
 echo "  atlas-web      ${WEB_APP_ID:-?}"

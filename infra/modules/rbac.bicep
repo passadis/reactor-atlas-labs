@@ -187,6 +187,24 @@ resource foundryUserAssignments 'Microsoft.Authorization/roleAssignments@2022-04
   }
 ]
 
+// The knowledge tool embeds queries through the ACCOUNT's /openai/v1 endpoint; the project-scope
+// Foundry User role above does not cover account-level data actions. Web and orchestrator both run
+// the incident agent in-process.
+resource agentHostOpenAIUsers 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
+  for p in [
+    { name: 'web', id: webPrincipalId }
+    { name: 'orchestrator', id: orchestratorPrincipalId }
+  ]: {
+    name: guid(foundryAccount.id, p.id, roles.cognitiveServicesOpenAIUser)
+    scope: foundryAccount
+    properties: {
+      roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.cognitiveServicesOpenAIUser)
+      principalId: p.id
+      principalType: 'ServicePrincipal'
+    }
+  }
+]
+
 // APIM reaches the models as itself. The model never holds a credential; APIM does.
 resource apimOpenAIUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(foundryAccount.id, apimPrincipalId, roles.cognitiveServicesOpenAIUser)
@@ -228,6 +246,9 @@ resource searchReaders 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
   for p in [
     { name: 'func', id: funcPrincipalId }
     { name: 'orchestrator', id: orchestratorPrincipalId }
+    // The web app runs the incident agent in-process ("This app" mode, Phase 04), so its
+    // search_knowledge tool reads the index directly. Missing in Phase 01; found by verify_phase04.
+    { name: 'web', id: webPrincipalId }
     // The project's own identity, so the AAD-authenticated project connection can actually read.
     { name: 'foundry-project', id: foundryProjectPrincipalId }
   ]: {

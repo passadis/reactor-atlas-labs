@@ -643,3 +643,95 @@ graded Sev2 before the rule was added; `verify_phase03` re-checks it on every ru
 `print()` of model output containing an em dash raised or printed replacement glyphs under cp1252.
 Every demo script calls `sys.stdout.reconfigure(encoding="utf-8")`, and the verify scripts export
 `PYTHONIOENCODING=utf-8`.
+
+## 11. Web app findings (Phase 04, 2026-09-19)
+
+Installed: `fastapi` 0.141.1, `sse-starlette` 3.4.11, `starlette` 1.6.0, `uvicorn` 0.53.0,
+`playwright` 1.63.0 (ui group only).
+
+### 11.1 Container Apps built-in auth works without a client secret
+
+With no client secret, Easy Auth uses the implicit flow and asks Entra only for an ID token
+([authentication-entra](https://learn.microsoft.com/azure/container-apps/authentication-entra)).
+That is all the UI needs: sign-in plus the `roles` claim. The App Service
+`OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID` managed-identity option is documented for App Service and
+Functions, not Container Apps, so it is not used. The `atlas-web` registration needs the
+`/.auth/login/aad/callback` redirect URI and `enableIdTokenIssuance`; both are set by
+`scripts/create_app_registrations.sh`, which also exposes `api://atlas-web/user_impersonation` with
+the Azure CLI pre-authorized, so scripts call the app as a real signed-in user with
+`az account get-access-token --scope api://atlas-web/user_impersonation`. No bypass is ever used
+against Azure.
+
+Behaviour to know when testing: an unauthenticated request with a browser User-Agent gets a 302 to
+Entra; `python-httpx` gets 401; an `X-Requested-With: XMLHttpRequest` request gets 403.
+
+### 11.2 Container Apps ingress does not propagate a client disconnect on SSE
+
+Locally, closing the stream cancels the server-side run within a second. Through Container Apps
+ingress the app never learns the client left: the run completed (status `done`, 14 s) after the
+client disconnected at 4.9 s. Fix, shipped: `POST /api/chat/{turn_id}/cancel`, sent by the Stop
+button and by `navigator.sendBeacon` on `pagehide`; it sets `cancel_requested` on the turn document
+(any replica), and the stream loop polls it every 1.5 s and cancels the run. The socket-disconnect
+path stays in place for where it does work.
+
+### 11.3 Parallel tool calls make stream-derived durations misleading
+
+gpt-5.4 issues tool calls in parallel and their results stream back together, so timing from the
+stream showed about 3 s for every tool in a batch. `atlas_agent.streaming.ToolTimer` is function
+middleware (subclass `FunctionMiddleware`, method `process`; a plain callable instance is rejected
+by the framework's middleware categorisation) passed per run with `agent.run(..., middleware=[...])`.
+The invocation context has no `call_id`, so timings are matched to streamed calls by tool name plus
+arguments. In-region results: Cosmos lookups 5-20 ms, knowledge search (embedding + hybrid query)
+about 0.5-2.7 s.
+
+### 11.4 Reasoning effort is the latency knob
+
+gpt-5.4 at default effort: canonical triage 19.7-20.9 s. At `reasoning.effort = "none"`:
+13.7-15.9 s from a laptop, 13.9 s warm in-region, with identical results on the canonical checks
+(Sev2, CHG-2026-0873, RB-0042, 2+ citations) and on the injection scenario (flagged, escalated,
+RB-0029 cited) across three runs each. `Settings.reasoning_effort` (env `ATLAS_REASONING_EFFORT`)
+defaults to `none`; Phase 12 re-measures quality per effort on the full evaluation set.
+
+### 11.5 Container build gotchas
+
+- A uv virtualenv must be built at its final path. Console-script shebangs are absolute; a venv
+  built at `/src/.venv` and copied to `/app/.venv` fails with `exec ... no such file or directory`.
+  The Dockerfile sets `UV_PROJECT_ENVIRONMENT=/app/.venv` and starts with `python -m uvicorn`.
+- The web image installs the uv workspace, so its build context is the repository root
+  (`azure.yaml` `docker.context: ../..`) with an allow-list `.dockerignore`.
+
+### 11.6 Provision must not reset deployed images
+
+The Phase 01 Bicep set every container app's image to the placeholder, so each `azd provision`
+reverted running apps until the next deploy. `infra/main.parameters.json` now passes
+`SERVICE_<NAME>_IMAGE_NAME` (written by `azd deploy`) into `compute-aca.bicep`, which uses the
+placeholder only when a service has never been deployed.
+
+### 11.7 Roles the web app was missing
+
+"This app" mode runs the incident agent inside the web container, so its identity needs what the
+agent's tools need: Search Index Data Reader on the search service (verify_phase04 found the
+knowledge tool returning `ToolFailure` in Azure; the triage still passed, citing RB-0042 from the
+service record's runbook list - the degraded path worked, but the tool must not be degraded), and
+Cognitive Services OpenAI User on the Foundry account for query embeddings (the project-scope
+Foundry User role does not cover the account's `/openai/v1` endpoint). Both are in `rbac.bicep`,
+for the web and orchestrator identities.
+
+### 11.8 Logging
+
+`configure_azure_monitor(logger_name="atlas")` attaches a handler to the `atlas` logger, which
+suppresses Python's last-resort stderr output, so exceptions were invisible in the container log
+stream. `configure_telemetry` now also installs a console handler when none exists. It also installs
+a plain SDK tracer provider when no connection string is set, so `traceparent` propagates even
+where nothing is exported.
+
+### 11.9 Contracts later phases must honour
+
+- The "Hosted agent" mode calls a Foundry agent named `atlas-incident-hosted` (env
+  `ATLAS_HOSTED_AGENT_NAME`). Phase 05 must deploy under that name; the mode then works with no web
+  redeploy, and until then it answers with a typed `not_deployed` event.
+- `GET /api/health` probes the orchestrator at `${ATLAS_ORCHESTRATOR_URL}/api/health` and shows the
+  "single-agent path" banner until it answers 200. Phase 06 must serve that route.
+- Cases live in the `cases` container (`/case_id`). Phase 07 adds `plan` with `status`, `risk`,
+  `tier` and `blast_radius`; the approvals console and `POST /api/approvals/{case_id}` already
+  enforce `can_approve` on exactly those fields.

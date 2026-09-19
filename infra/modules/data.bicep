@@ -92,6 +92,9 @@ var containers = [
   // 7 days. Guarantees exactly-once remediation within the window that matters.
   { name: 'idempotency', partitionKey: '/key', defaultTtl: 604800 }
   { name: 'sessions', partitionKey: '/session_id', defaultTtl: 86400 }
+  // A case per triage: validated IncidentTriage, tool timeline, citations, trace id. Phase 06/07
+  // add typed workflow state, the plan and its approval. Cleared by `make demo-reset`.
+  { name: 'cases', partitionKey: '/case_id', defaultTtl: -1 }
   { name: 'eval-runs', partitionKey: '/run_id', defaultTtl: -1 }
   // -- reference data, loaded by scripts/seed.py (Phase 02) --------------------------------------
   // Pre-created here, never by the seeder: container creation is a control-plane call and the

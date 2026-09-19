@@ -80,6 +80,14 @@ param embedCapacity int = 120
 @description('Deploy the optional Azure Managed Redis used for APIM semantic caching. Adds roughly 25 minutes to provisioning.')
 param enableSemanticCache bool = false
 
+@description('Last deployed images (azd writes SERVICE_<NAME>_IMAGE_NAME after each deploy).')
+param webImage string = ''
+param orchestratorImage string = ''
+param workerImage string = ''
+
+@description('atlas-web app registration client id (scripts/create_app_registrations.sh). Enables built-in auth on the web app.')
+param webAppClientId string = ''
+
 // ---------------------------------------------------------------------------- variables --
 
 // 8 lowercase chars, deterministic per (subscription, env, location). Every name derives from it.
@@ -213,6 +221,13 @@ module computeAca './modules/compute-aca.bicep' = {
     serviceBusNamespaceName: messaging.outputs.namespaceName
     commandsQueueName: messaging.outputs.commandsQueueName
     storageBlobEndpoint: data.outputs.storageBlobEndpoint
+    azdEnvironmentName: environmentName
+    foundryAccountName: foundry.outputs.accountName
+    appInsightsId: observability.outputs.appInsightsId
+    webAppClientId: webAppClientId
+    webImage: webImage
+    orchestratorImage: orchestratorImage
+    workerImage: workerImage
   }
 }
 
