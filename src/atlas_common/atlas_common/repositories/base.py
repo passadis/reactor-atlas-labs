@@ -96,6 +96,34 @@ class CosmosStore:
 
         return await with_timeout(collect(), f"Cosmos {container}", timeout_s)
 
+    async def upsert(
+        self, container: str, document: dict[str, Any], *, timeout_s: float = DEFAULT_TIMEOUT_S
+    ) -> None:
+        """Create or replace one document, under a timeout."""
+        await with_timeout(
+            self.container(container).upsert_item(document), f"Cosmos {container}", timeout_s
+        )
+
+    async def delete(
+        self,
+        container: str,
+        item_id: str,
+        partition_key: str,
+        *,
+        timeout_s: float = DEFAULT_TIMEOUT_S,
+    ) -> bool:
+        """Delete one document. Returns False if it did not exist; that is not an error."""
+        from azure.core.exceptions import ResourceNotFoundError
+
+        async def run() -> bool:
+            try:
+                await self.container(container).delete_item(item_id, partition_key=partition_key)
+            except ResourceNotFoundError:
+                return False
+            return True
+
+        return await with_timeout(run(), f"Cosmos {container}", timeout_s)
+
     async def close(self) -> None:
         await self._client.close()
         if self._owns_credential:

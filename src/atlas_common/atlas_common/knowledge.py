@@ -136,14 +136,18 @@ def runbook_documents(
         # Services go into the chunk text as well as the filterable field: the filter narrows
         # retrieval, but only text is seen by the keyword and semantic rankers.
         context = f"Services: {', '.join(fm.services)}. Risk: {fm.risk}."
-        for n, chunk in enumerate(chunk_markdown(fm.title, body, context), start=1):
+        # The id leads the title, as it already does for incidents and postmortems. The Foundry
+        # Azure AI Search agent tool shows the model a title and content but never `doc_id`, so
+        # without it a prompt agent can name a runbook but not cite it (docs/API-NOTES.md 10.3).
+        title = f"{fm.runbook_id} {fm.title}"
+        for n, chunk in enumerate(chunk_markdown(title, body, context), start=1):
             docs.append(
                 KnowledgeDocument(
                     # Search keys allow letters, digits, underscore, dash and equals only.
                     id=f"{fm.runbook_id}-c{n:02d}",
                     doc_type="runbook",
                     doc_id=fm.runbook_id,
-                    title=fm.title,
+                    title=title,
                     chunk=chunk,
                     services=list(fm.services),
                     risk=fm.risk,

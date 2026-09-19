@@ -115,6 +115,7 @@ class KnowledgeSearch:
                         doc_type=r["doc_type"],
                         title=r["title"],
                         snippet=str(r.get("chunk") or "")[:SNIPPET_CHARS],
+                        text=str(r.get("chunk") or ""),
                         services=list(r.get("services") or []),
                         last_reviewed=r.get("last_reviewed"),
                         score=float(r.get("@search.score") or 0.0),

@@ -523,3 +523,123 @@ line is SDK logging, not an application error. The Phase 03 telemetry module sho
 Telemetry is **6,768** windows. The 6,816 reported mid-Phase 02 came from the first generation run,
 before the near-duplicate fix changed incident services and timings. File, manifest, git and Cosmos
 all agree on 6,768.
+
+## 10. Agent core findings (Phase 03, 2026-09-18)
+
+Installed: `agent-framework` 1.18.0, `agent-framework-openai` 1.14.3, `azure-ai-projects` 2.6.1,
+`azure-monitor-opentelemetry` 1.8.10.
+
+### 10.1 Content-filter rejections crash the framework's own exception (workaround in place)
+
+A prompt blocked by the `atlas-strict` RAI policy (jailbreak shield) comes back from Foundry as
+`400` with `innererror.code = "ContentFiltered"`. `agent_framework_openai._exceptions` builds
+`OpenAIContentFilterException` with `ContentFilterCodes(inner_error["code"])`, and that enum only
+has `ResponsibleAIPolicyViolation`. So constructing the exception raises **`ValueError`**, with
+the real `openai.BadRequestError` as its `__context__`. Callers that catch
+`ChatClientContentFilterException` never see it; the audience would see a stack trace.
+
+**Workaround:** `atlas_agent.factory.model_failure_reason()` walks the cause/context chain and
+classifies `content_filter` / `APIStatusError` / framework exceptions. `triage()` and `answer()`
+both use it, and return `TriageFailure(reason="content_filtered")` or a `ChatTurn` with the fixed
+degraded message. Tested live in `tests/test_guardrails.py::test_jailbreak_is_blocked_by_the_platform_and_typed`.
+Re-check on every `agent-framework-openai` upgrade; remove the chain walk when the enum is fixed.
+
+### 10.2 `rai_config.rai_policy_name` needs the full ARM resource ID, and fails open
+
+For a prompt agent (`PromptAgentDefinition(rai_config=RaiConfig(...))`), the bare name
+`atlas-strict` is rejected with `The specified RAI policy name ... is invalid`. The docs
+([add-hosted-agent-guardrails](https://learn.microsoft.com/azure/foundry/agents/how-to/add-hosted-agent-guardrails))
+require the full `/subscriptions/.../accounts/<acct>/raiPolicies/<name>` ID, and warn that on many
+subscriptions a nonexistent ID is accepted and **applies no filtering**. `create_prompt_agent.py`
+therefore builds the ID from azd env values and GETs it through ARM before creating a version;
+a missing policy aborts the create.
+
+### 10.3 The Azure AI Search agent tool needs more than Index Data Reader
+
+The prompt agent's `AzureAISearchTool` (via the project `aisearch` connection, `authType: AAD`)
+returned `Access denied ... managed identity access to the search service` although the project
+identity holds Search Index Data Reader. The docs
+([ai-search tool](https://learn.microsoft.com/azure/foundry/agents/how-to/tools/ai-search)) list
+**Search Index Data Contributor + Search Service Contributor** on the Foundry **account** identity.
+`rbac.bicep` now adds Search Service Contributor for the account and project identities and Index
+Data Reader for the account identity. Data Contributor is deliberately not granted: the tool is
+read-only. If the tool still 403s after propagation, Data Contributor is the next step and this
+note must be updated.
+
+**Result after provisioning (2026-09-19):** the three roles were enough. No "Access denied" from
+the first call after propagation; Data Contributor is not needed.
+
+**But the tool then retrieved badly.** Its default `query_type` is `vector_semantic_hybrid`, which
+needs an **integrated vectorizer** on the index, and `idx-atlas-knowledge` had none (ATLAS embeds at
+seed time). Forced to `semantic`, the tool ranked incident records above RB-0042 for a Checkout
+latency question, and it could not cite a runbook id: the tool exposes title, content and a URL
+field, never `doc_id`. An honest side effect worth showing: for a topic with no runbook ("payment
+provider timeouts") it answered "I have no grounded source for that", as the instructions require.
+
+Fix, all in place, no re-embedding:
+- The Search service's system identity gets Cognitive Services OpenAI User on the Foundry account.
+- The index gets an `AzureOpenAIVectorizer` (`embed-main` on `https://<acct>.openai.azure.com`) on
+  its vector profile, so the tool can run hybrid queries.
+- The prompt agent uses `vector_semantic_hybrid`. With that alone it retrieved the right runbook
+  but could only name it by title ("I have no grounded source for a runbook id").
+- A `url` field (`{ATLAS_WEB_URL}/kb/{doc_id}`, metadata-only merge in `seed.py`) did **not** help:
+  the tool's citation annotation carries the Search endpoint, not a document field. The field stays
+  for the web app's citation links. How the tool chooses a URL field is undocumented.
+- What worked: runbook titles now lead with the id (`RB-0042 Mitigating elevated p95 latency on
+  Checkout API`), as incident and postmortem titles already did. The model reads titles. Only the 60
+  runbook chunks were re-embedded; the Phase 02 ranking fixture (RB-0042 first, scoped) still holds.
+  Result: the prompt agent answers "The runbook is **RB-0042**".
+
+### 10.4 The knowledge tool was feeding the model 600-character excerpts
+
+`KnowledgeHit.snippet` is the first 600 characters of a chunk, for display. The Phase 03 tool
+passed it to the model, which (a) grounded "which runbook" answers on the first few lines of a
+procedure and (b) never showed the model the Episode 4 injection payloads, which sit at the end of
+RB-0029 and RB-0047. The injection test passed for the wrong reason: the agent could not see the
+attack. `KnowledgeHit.text` now carries the full chunk; `search_knowledge` fetches `top * 2`
+chunks and merges chunks of the same document, so a runbook split across chunks is one cited
+source. The canonical triage goes from about 22K to 27-32K input tokens; no latency change was
+measurable.
+
+### 10.5 Agent Framework 1.18.0 behaviour relied on
+
+- `Agent.run()` has no `instructions` parameter. Per-request instruction versions (CLAUDE.md 9.1)
+  mean a per-request `Agent`, which is cheap: the expensive clients live in `IncidentAgentRuntime`.
+- `STORES_BY_DEFAULT` is True. `default_options={"store": False}` makes the framework inject an
+  `InMemoryHistoryProvider`; `AgentSession.to_dict()/from_dict()` then round-trips the full history.
+  Sessions persist to the Cosmos `sessions` container (TTL 24 h). Both service-managed and local
+  history recalled correctly in a live test; local was chosen so the transcript is ATLAS data,
+  visible in Cosmos and cleared by `make demo-reset`.
+- Default function invocation: 40 iterations, no call or time cap. ATLAS sets 10 iterations,
+  24 calls, 90 s, no detailed errors to the model.
+- A tool returning a Pydantic model is serialised with `model_dump` to JSON text for the model.
+- Streaming `AgentResponseUpdate.contents` item types used: `function_call` (`name`, `call_id`,
+  arguments arrive in fragments), `function_result`, `text`, `usage`.
+- Structured output: `options={"response_format": IncidentTriage}`, then `response.value`, which
+  raises `ValidationError`. Retry once with the validation errors in the prompt, then
+  `TriageFailure(reason="invalid_output")`.
+
+### 10.6 Telemetry pattern
+
+Per the Learn sample for Agent Framework on Azure Monitor:
+`configure_azure_monitor(resource=create_resource(...))` then
+`enable_instrumentation(enable_sensitive_data=False)`. `atlas_common.telemetry` wraps both,
+restricts App Insights log collection to the `atlas` logger namespace, uses managed-identity
+ingestion in Azure, and exposes `inject_context` / `continued_from` for hops that are not
+auto-instrumented (Service Bus). Verified end-to-end: a local demo run produced 76 spans under one
+operation id in Application Insights within about two minutes. The SDK emits W3C Level 2 trace
+flags (`-03`, sampled + random), so a `traceparent` validator must not insist on `-01`.
+
+### 10.7 Severity was not stable until the rubric was measurable
+
+With "use judgement" wording, the canonical incident graded Sev1 cold and Sev2 warm. v1 section 8
+is now a table keyed on measured values (peak error rate, p95 against SLO, tier), with an explicit
+"missing measurements are not evidence of no impact" rule after a probe graded a customer-visible
+Search incident Sev4 because its telemetry was empty. Five parallel runs of the canonical triage all
+graded Sev2 before the rule was added; `verify_phase03` re-checks it on every run.
+
+### 10.8 Windows console
+
+`print()` of model output containing an em dash raised or printed replacement glyphs under cp1252.
+Every demo script calls `sys.stdout.reconfigure(encoding="utf-8")`, and the verify scripts export
+`PYTHONIOENCODING=utf-8`.

@@ -47,6 +47,9 @@ class KnowledgeDocument(BaseModel):
     last_reviewed: str | None = None
     owner_team: str | None = None
     source_path: str
+    # Link to the web app's knowledge page for this document, for citation links in the UI.
+    # (The Foundry Azure AI Search tool does not use it; see docs/API-NOTES.md 10.3.)
+    url: str = ""
     injection_canary: bool = False
     # sha256 of the embedded text. Lets a re-seed skip re-embedding unchanged documents, which is
     # what makes scripts/seed.py idempotent and cheap to re-run.
@@ -67,6 +70,10 @@ class KnowledgeHit(BaseModel):
     doc_type: DocType
     title: str
     snippet: str
+    # The whole retrieved chunk. `snippet` is its first few hundred characters, for display; the
+    # agent reads `text`. Grounding an answer on a 600-character excerpt of a runbook is not
+    # grounding, and it silently hid the Episode 4 injection payloads from the model.
+    text: str = ""
     services: list[str]
     last_reviewed: str | None
     score: float

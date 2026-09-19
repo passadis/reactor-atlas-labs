@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -20,6 +21,14 @@ EMBEDDING_DIMENSIONS = 3072  # text-embedding-3-large. CLAUDE.md section 7.11.
 MODEL_MAIN = "gpt-main"
 MODEL_JUDGE = "gpt-judge"
 MODEL_EMBED = "embed-main"
+
+# The operations clock. The seeded Contoso world is anchored to 2026-09-01 and the canonical
+# incident begins at 14:05 on that day, so "now" for every tool is fixed at 14:20 - fifteen minutes
+# into the incident. Without this, "changes in the last four hours" would be measured from the real
+# date, the canonical change would fall outside every window, and the demo would silently find
+# nothing. Override with ATLAS_OPS_NOW.
+DEFAULT_OPS_NOW = "2026-09-01T14:20:00Z"
+INSTRUCTIONS_VERSION = "v1"
 
 
 def load_local_env(path: Path | None = None) -> None:
@@ -49,6 +58,8 @@ class Settings:
     model_main: str = MODEL_MAIN
     model_embed: str = MODEL_EMBED
     knowledge_index: str = KNOWLEDGE_INDEX
+    ops_now: datetime = datetime(2026, 9, 1, 14, 20, tzinfo=UTC)
+    instructions_version: str = INSTRUCTIONS_VERSION
 
     @property
     def foundry_openai_base_url(self) -> str:
@@ -59,6 +70,11 @@ class Settings:
         """
         return f"https://{self.foundry_account_name}.services.ai.azure.com/openai/v1/"
 
+    @property
+    def foundry_openai_resource_url(self) -> str:
+        """The account's Azure OpenAI host, the form the Search vectorizer expects."""
+        return f"https://{self.foundry_account_name}.openai.azure.com"
+
     @classmethod
     def from_env(cls) -> Settings:
         load_local_env()
@@ -68,4 +84,8 @@ class Settings:
             search_endpoint=_require("ATLAS_SEARCH_ENDPOINT"),
             foundry_project_endpoint=_require("FOUNDRY_PROJECT_ENDPOINT"),
             foundry_account_name=_require("ATLAS_FOUNDRY_ACCOUNT_NAME"),
+            ops_now=datetime.fromisoformat(
+                os.environ.get("ATLAS_OPS_NOW", DEFAULT_OPS_NOW).replace("Z", "+00:00")
+            ),
+            instructions_version=os.environ.get("ATLAS_INSTRUCTIONS_VERSION", INSTRUCTIONS_VERSION),
         )

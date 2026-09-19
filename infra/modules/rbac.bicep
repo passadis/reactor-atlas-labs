@@ -21,11 +21,17 @@ param foundryProjectName string
 @description('Foundry project system-assigned principal id.')
 param foundryProjectPrincipalId string
 
+@description('Foundry account system-assigned principal id. Server-side agent tools (the Azure AI Search tool) call Search as this identity.')
+param foundryAccountPrincipalId string
+
 @description('Cosmos account name.')
 param cosmosAccountName string
 
 @description('AI Search service name.')
 param searchServiceName string
+
+@description('AI Search system-assigned principal id. The index vectorizer calls embed-main as this identity.')
+param searchPrincipalId string
 
 @description('Service Bus namespace name.')
 param serviceBusNamespaceName string
@@ -192,6 +198,19 @@ resource apimOpenAIUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
+// The knowledge index's integrated vectorizer embeds agent-tool queries by calling embed-main as the
+// Search service's own identity. Without it the Foundry Azure AI Search tool cannot run hybrid
+// queries (docs/API-NOTES.md 10.3).
+resource searchOpenAIUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(foundryAccount.id, searchPrincipalId, roles.cognitiveServicesOpenAIUser)
+  scope: foundryAccount
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.cognitiveServicesOpenAIUser)
+    principalId: searchPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // Required to deploy a hosted agent (Phase 05).
 resource operatorProjectManager 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (hasOperator) {
   name: guid(foundryProject.id, principalId, roles.foundryProjectManager)
@@ -217,6 +236,32 @@ resource searchReaders 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
     properties: {
       roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.searchIndexDataReader)
       principalId: p.id
+      principalType: 'ServicePrincipal'
+    }
+  }
+]
+
+// The Foundry Azure AI Search agent tool (prompt and hosted agents) reads the index definition as
+// well as its documents, and runs as the Foundry identities, not as the caller. Index Data Reader
+// alone returns "Access denied" from the tool (probed 2026-09-18). Reads only: Data Contributor,
+// which the docs list, is not needed for a read-only knowledge tool.
+resource foundryAccountSearchReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(search.id, foundryAccountPrincipalId, roles.searchIndexDataReader)
+  scope: search
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.searchIndexDataReader)
+    principalId: foundryAccountPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource foundrySearchServiceContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
+  for p in [foundryAccountPrincipalId, foundryProjectPrincipalId]: {
+    name: guid(search.id, p, roles.searchServiceContributor)
+    scope: search
+    properties: {
+      roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.searchServiceContributor)
+      principalId: p
       principalType: 'ServicePrincipal'
     }
   }

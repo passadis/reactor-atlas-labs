@@ -88,6 +88,23 @@ verify-phase02: ## Verify seeded Cosmos + AI Search against the deployed environ
 freeze-fixtures: ## Re-freeze golden fixtures (deliberate act; review the diff)
 	$(PY) -m scripts.freeze_fixtures
 
+# ---------------------------------------------------------------- Phase 03 --
+.PHONY: demo-agent
+demo-agent: ## Episode 1: the incident agent locally, streaming, then a follow-up (session in Cosmos)
+	$(PY) -m scripts.demo_agent_local
+
+.PHONY: demo-raw
+demo-raw: ## Episode 1: the same report to the bare model, no tools, no data
+	$(PY) -m scripts.demo_raw_model
+
+.PHONY: prompt-agent
+prompt-agent: ## Create or update the Foundry prompt agent atlas-triage-prompt (idempotent)
+	$(PY) -m scripts.create_prompt_agent
+
+.PHONY: verify-phase03
+verify-phase03: ## Verify the incident agent, prompt agent, guardrails and tracing against Azure
+	bash scripts/verify_phase03.sh
+
 # ---------------------------------------------------------------- Phase 12 --
 .PHONY: eval
 eval: ## Run the evaluation suite and write a scorecard (Phase 12)

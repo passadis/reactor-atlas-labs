@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import time
 from collections.abc import Callable, Iterable, Sequence
@@ -32,6 +33,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from atlas_agent.instructions import CONTAINER as INSTRUCTIONS_CONTAINER
+from atlas_agent.instructions import instruction_documents
 from atlas_common.auth import SCOPE_FOUNDRY, get_async_credential, get_credential
 from atlas_common.config import EMBEDDING_DIMENSIONS, Settings
 from atlas_common.knowledge import (
@@ -53,6 +56,7 @@ from atlas_common.models import (
     Service,
     TelemetryWindow,
 )
+from atlas_common.repositories import CosmosStore
 from atlas_common.search_index import build_knowledge_index
 from azure.core.exceptions import ResourceNotFoundError
 from azure.cosmos.aio import CosmosClient
@@ -208,10 +212,30 @@ async def seed_cosmos(settings: Settings, plans: Iterable[CosmosPlan]) -> dict[s
     return written
 
 
+async def seed_instructions(settings: Settings) -> int:
+    """Copy the instruction versions from the package into Cosmos (CLAUDE.md section 9.1).
+
+    Also resets the active pointer to v1. Seeding is a T-10 operation, so it doubles as the
+    baseline restore for the v0/v1 switch.
+    """
+    docs = instruction_documents()
+    async with CosmosStore(settings) as store:
+        for doc in docs:
+            await store.upsert(INSTRUCTIONS_CONTAINER, doc)
+    versions = sorted(d["version"] for d in docs if not d["id"].endswith(":active"))
+    print(f"  cosmos {INSTRUCTIONS_CONTAINER:<18} {len(docs):>3} upserted (versions {versions})")
+    return len(docs)
+
+
 # ---------------------------------------------------------------------------- search --
 
 
-def knowledge_documents(data: SeedData) -> list[KnowledgeDocument]:
+def knowledge_url(web_url: str, doc_id: str) -> str:
+    """Where a citation points: the web app's knowledge page for the document (Phase 04)."""
+    return f"{web_url.rstrip('/')}/kb/{doc_id}" if web_url else f"atlas://kb/{doc_id}"
+
+
+def knowledge_documents(data: SeedData, web_url: str = "") -> list[KnowledgeDocument]:
     docs = [
         *runbook_documents(data.runbooks),
         *incident_documents(data.incidents),
@@ -219,14 +243,15 @@ def knowledge_documents(data: SeedData) -> list[KnowledgeDocument]:
     ]
     for doc in docs:
         doc.content_hash = content_hash(embedding_text(doc))
+        doc.url = knowledge_url(web_url, doc.doc_id)
     return docs
 
 
-def existing_hashes(client: SearchClient) -> dict[str, str]:
-    """id -> content_hash for everything already in the index."""
+def existing_state(client: SearchClient) -> dict[str, tuple[str, str]]:
+    """id -> (content_hash, url) for everything already in the index."""
     return {
-        str(hit["id"]): str(hit.get("content_hash") or "")
-        for hit in client.search(search_text="*", select=["id", "content_hash"])
+        str(hit["id"]): (str(hit.get("content_hash") or ""), str(hit.get("url") or ""))
+        for hit in client.search(search_text="*", select=["id", "content_hash", "url"])
     }
 
 
@@ -251,14 +276,28 @@ def embed(openai: OpenAI, model: str, texts: list[str]) -> list[list[float]]:
 def seed_search(settings: Settings, data: SeedData, force_embed: bool) -> dict[str, int]:
     credential = get_credential()
     index_client = SearchIndexClient(settings.search_endpoint, credential)
-    index_client.create_or_update_index(build_knowledge_index(settings.knowledge_index))
+    index_client.create_or_update_index(
+        build_knowledge_index(
+            settings.knowledge_index,
+            vectorizer_resource_url=settings.foundry_openai_resource_url,
+            embedding_deployment=settings.model_embed,
+        )
+    )
     print(f"  search index '{settings.knowledge_index}' created or updated")
 
     search = SearchClient(settings.search_endpoint, settings.knowledge_index, credential)
-    docs = knowledge_documents(data)
-    current = existing_hashes(search)
+    docs = knowledge_documents(data, os.environ.get("ATLAS_WEB_URL", ""))
+    state = existing_state(search)
+    current = {doc_id: pair[0] for doc_id, pair in state.items()}
 
     changed = [d for d in docs if force_embed or current.get(d.id) != d.content_hash]
+    changed_ids = {d.id for d in changed}
+    # Metadata-only drift (today: the citation url) is a merge, never a re-embed.
+    relinked = [
+        {"id": d.id, "url": d.url}
+        for d in docs
+        if d.id not in changed_ids and d.id in state and state[d.id][1] != d.url
+    ]
     stale_ids = sorted(set(current) - {d.id for d in docs})
     print(
         f"  {len(docs)} documents: {len(changed)} to embed, "
@@ -282,10 +321,21 @@ def seed_search(settings: Settings, data: SeedData, force_embed: bool) -> dict[s
             if failed:
                 raise SystemExit(f"search upload failed for {failed[:5]}")
 
+    for start in range(0, len(relinked), UPLOAD_BATCH):
+        results = search.merge_documents(relinked[start : start + UPLOAD_BATCH])
+        failed = [r.key for r in results if not r.succeeded]
+        if failed:
+            raise SystemExit(f"search metadata merge failed for {failed[:5]}")
+
     if stale_ids:
         search.delete_documents([{"id": i} for i in stale_ids])
 
-    return {"documents": len(docs), "embedded": len(changed), "deleted": len(stale_ids)}
+    return {
+        "documents": len(docs),
+        "embedded": len(changed),
+        "relinked": len(relinked),
+        "deleted": len(stale_ids),
+    }
 
 
 # ---------------------------------------------------------------------------- main --
@@ -312,6 +362,7 @@ def main(argv: list[str] | None = None) -> int:
     search: dict[str, int] = {}
     if not args.skip_cosmos:
         cosmos = asyncio.run(seed_cosmos(settings, cosmos_plans(data)))
+        cosmos[INSTRUCTIONS_CONTAINER] = asyncio.run(seed_instructions(settings))
     if not args.skip_search:
         search = seed_search(settings, data, args.force_embed)
 

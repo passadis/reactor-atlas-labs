@@ -284,8 +284,10 @@ module rbac './modules/rbac.bicep' = {
     foundryAccountName: foundry.outputs.accountName
     foundryProjectName: foundry.outputs.projectName
     foundryProjectPrincipalId: foundry.outputs.projectPrincipalId
+    foundryAccountPrincipalId: foundry.outputs.accountPrincipalId
     cosmosAccountName: data.outputs.cosmosAccountName
     searchServiceName: data.outputs.searchServiceName
+    searchPrincipalId: data.outputs.searchPrincipalId
     serviceBusNamespaceName: messaging.outputs.namespaceName
     commandsQueueName: messaging.outputs.commandsQueueName
     resultsQueueName: messaging.outputs.resultsQueueName
