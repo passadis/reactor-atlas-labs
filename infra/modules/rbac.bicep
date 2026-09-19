@@ -33,6 +33,9 @@ param searchServiceName string
 @description('AI Search system-assigned principal id. The index vectorizer calls embed-main as this identity.')
 param searchPrincipalId string
 
+@description('Entra agent identity of the Foundry hosted agent (created by the platform on its first deploy; recorded by scripts/record_hosted_identity.sh). Empty until then.')
+param hostedAgentPrincipalId string = ''
+
 @description('Service Bus namespace name.')
 param serviceBusNamespaceName string
 
@@ -104,6 +107,7 @@ var roles = {
 
 // Cosmos DB Built-in Data Contributor. A fixed, well-known data-plane role id, not an ARM role.
 var cosmosDataContributorRoleId = '00000000-0000-0000-0000-000000000002'
+var cosmosDataReaderRoleId = '00000000-0000-0000-0000-000000000001'
 
 var hasOperator = !empty(principalId)
 
@@ -562,6 +566,44 @@ resource cosmosDataAssignments 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAss
     }
   }
 ]
+
+// ---------------------------------------------------------------- hosted agent (Phase 05) --
+// The Foundry hosted agent runs the same atlas_agent tools as the web app, under its OWN Entra agent
+// identity. Until Phase 09 re-points the tools at the APIM-fronted ops API, that identity reads
+// Cosmos and Search directly - READ ONLY: every ATLAS agent tool is read-only, and the platform
+// keeps the hosted agent's conversation history, so it never writes to Cosmos. Embeddings go
+// through the account's /openai/v1 endpoint, which the project-scope defaults do not cover.
+var hasHostedAgent = !empty(hostedAgentPrincipalId)
+
+resource hostedAgentCosmosReader 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2026-03-15' = if (hasHostedAgent) {
+  parent: cosmos
+  name: guid(cosmos.id, hostedAgentPrincipalId, cosmosDataReaderRoleId)
+  properties: {
+    roleDefinitionId: '${cosmos.id}/sqlRoleDefinitions/${cosmosDataReaderRoleId}'
+    principalId: hostedAgentPrincipalId
+    scope: cosmos.id
+  }
+}
+
+resource hostedAgentSearchReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (hasHostedAgent) {
+  name: guid(search.id, hostedAgentPrincipalId, roles.searchIndexDataReader)
+  scope: search
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.searchIndexDataReader)
+    principalId: hostedAgentPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource hostedAgentOpenAIUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (hasHostedAgent) {
+  name: guid(foundryAccount.id, hostedAgentPrincipalId, roles.cognitiveServicesOpenAIUser)
+  scope: foundryAccount
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.cognitiveServicesOpenAIUser)
+    principalId: hostedAgentPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
 
 // The operator seeds Cosmos from a laptop in Phase 02 and inspects checkpoints on stage in
 // Episode 2. Without this, both 403.

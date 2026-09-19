@@ -181,7 +181,11 @@ resource acaEnv 'Microsoft.App/managedEnvironments@2026-01-01' = {
         name: 'dedicated-d4'
         workloadProfileType: 'D4'
         minimumCount: 1
-        maximumCount: 3
+        // Headroom for rollouts: a new revision's replicas run beside the old ones until they are
+        // ready. At 3 (12 vCPU) web x2 + orchestrator x2 (2 vCPU each) + worker + built-in auth
+        // sidecars left no room, and a web revision sat in Activating with an unscheduled replica
+        // (2026-09-19, API-NOTES 12). Nodes above the steady state exist only during a rollout.
+        maximumCount: 6
       }
     ]
     zoneRedundant: false

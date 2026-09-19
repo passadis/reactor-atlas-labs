@@ -39,3 +39,5 @@ Thumbs.db
 .env.local
 agents/.azure/
 .pytest-tmp/
+agents/src/
+agents/.generated/

@@ -80,6 +80,9 @@ param embedCapacity int = 120
 @description('Deploy the optional Azure Managed Redis used for APIM semantic caching. Adds roughly 25 minutes to provisioning.')
 param enableSemanticCache bool = false
 
+@description('Entra agent identity of the Foundry hosted agent; empty until its first deploy.')
+param hostedAgentPrincipalId string = ''
+
 @description('Last deployed images (azd writes SERVICE_<NAME>_IMAGE_NAME after each deploy).')
 param webImage string = ''
 param orchestratorImage string = ''
@@ -300,6 +303,7 @@ module rbac './modules/rbac.bicep' = {
     foundryProjectName: foundry.outputs.projectName
     foundryProjectPrincipalId: foundry.outputs.projectPrincipalId
     foundryAccountPrincipalId: foundry.outputs.accountPrincipalId
+    hostedAgentPrincipalId: hostedAgentPrincipalId
     cosmosAccountName: data.outputs.cosmosAccountName
     searchServiceName: data.outputs.searchServiceName
     searchPrincipalId: data.outputs.searchPrincipalId

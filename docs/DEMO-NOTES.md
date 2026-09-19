@@ -373,3 +373,63 @@ scope=full, knowledge page RB-0042, approvals console.
   this.
 - The first measurement said "every tool took 3 seconds". They ran in parallel; the stream reports
   the batch. A small piece of middleware now times each tool on its own.
+
+## Phase 05 - The Foundry hosted agent (Episode 1: "Foundry runs it")
+
+The same `atlas_agent` definition, hosted by Foundry under its own Entra agent identity. The web
+app's header switch now has three live backends plus the bare model: **Model call**, **Prompt
+agent** (Foundry, toolbox), **Hosted agent** (Foundry, our code), **This app** (our code, our
+container). Same UI, same activity panel, same structured card.
+
+### Pinned versions (record of what is live)
+
+| Surface | Name | Pinned / current | Notes |
+|---|---|---|---|
+| Hosted agent | `atlas-incident-agent` | **v4** (endpoint pinned, 100%) | v3 = rollback target. v1 (guardrail placeholder, fails open) and v2 (startup bug) deleted. |
+| Prompt agent | `atlas-triage-prompt` | **v5** | tools from the `atlas-tools` toolbox over MCP; guardrail `atlas-strict` |
+| Toolbox | `atlas-tools` | **v1** (default) | knowledge index; ops MCP + Logic Apps join in Phases 09-10 |
+| Web app | `ca-atlas-web-mkruniv7` | revision `azd-1789834232` | |
+
+Agent identity (object id): `95f4f0a7-a599-4ed8-a9f3-67f8301a2d0a` - Cosmos Data Reader, Search
+Index Data Reader, Cognitive Services OpenAI User.
+
+### What to show
+
+| Beat | Do | Say |
+|---|---|---|
+| Same agent, two hosts | Send the canonical report in "This app", then in "Hosted agent". Same tools stream, same Sev2 card. | One definition. Foundry runs one copy, our container runs the other. `src/atlas_hosted_agent/agent.py` is an adapter, not a second agent. |
+| Its own identity | Portal -> the agent -> identity; or `make hosted-status` | The hosted agent does not borrow my credentials or the web app's. It has read-only rights, granted in Bicep. |
+| Versions are pointers | `make hosted-status`, then `make hosted-rollback`, then `make hosted-pin VERSION=4` | Rolling back is a pointer flip on the endpoint - seconds, no build, no deploy. |
+| Tools curated once | Portal -> Toolboxes -> `atlas-tools`; prompt agent answers RB-0042 through it | Add a tool here and every agent attached to the toolbox has it, without redeploying any of them. |
+| The guardrail that silently was not | API-NOTES 12.3: version 1 shipped with a placeholder policy name | A guardrail that fails open looks exactly like a guardrail that works. We check the stored policy, every deploy. |
+
+### Measured
+
+| Path | Time |
+|---|---|
+| Hosted agent, new sandbox (first conversation) | 28-38 s |
+| Hosted agent, warm sandbox (reused session) | 13-17 s |
+| Follow-up in the same conversation | about 4 s |
+| Rollback / re-pin | seconds (single control call) |
+
+The web app keeps the warm hosted sandbox for new conversations. **T-10 routine: send one
+triage in "Hosted agent" mode before going live** so the first on-stage run is warm.
+
+### Commands
+
+```bash
+make hosted-deploy            # stage + azd deploy -C agents + guardrail check (never on stage)
+make hosted-status            # versions, pin, guardrail, identity
+make hosted-pin VERSION=4     # pointer flip
+make hosted-rollback          # previous good version
+make toolbox                  # upsert atlas-tools and re-attach to the prompt agent
+make verify-phase05           # 11 checks incl. rollback and re-pin, about 6 minutes
+```
+
+### Fallbacks
+
+| If this fails live | Do this |
+|---|---|
+| Hosted agent slow on the first call | Say "that is the sandbox starting" - it is. Or run the T-10 warm-up. |
+| Hosted agent errors (424 session_not_ready) | `azd ai agent monitor atlas-incident-agent -C agents -s <session> -t console`; switch to "This app" - same agent, same answer. |
+| Wrong version live | `make hosted-pin VERSION=4`. |

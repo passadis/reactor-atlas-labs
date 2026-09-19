@@ -33,7 +33,15 @@ INSTRUCTIONS_VERSION = "v1"
 
 def load_local_env(path: Path | None = None) -> None:
     """Load `.env.local` if present. Existing environment variables always win."""
-    candidate = path or Path(__file__).resolve().parents[3] / ".env.local"
+    if path is None:
+        # Repo layout only: src/atlas_common/atlas_common/config.py -> repo root. Packaged
+        # deployments (the hosted agent's /app/atlas_common/config.py, a site-packages install)
+        # are shallower or elsewhere, have no .env.local, and read the real environment.
+        parents = Path(__file__).resolve().parents
+        if len(parents) < 4:
+            return
+        path = parents[3] / ".env.local"
+    candidate = path
     if candidate.exists():
         load_dotenv(candidate, override=False)
 

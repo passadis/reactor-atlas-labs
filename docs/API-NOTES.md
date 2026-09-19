@@ -727,11 +727,111 @@ where nothing is exported.
 
 ### 11.9 Contracts later phases must honour
 
-- The "Hosted agent" mode calls a Foundry agent named `atlas-incident-hosted` (env
-  `ATLAS_HOSTED_AGENT_NAME`). Phase 05 must deploy under that name; the mode then works with no web
-  redeploy, and until then it answers with a typed `not_deployed` event.
+- The "Hosted agent" mode calls the Foundry agent `atlas-incident-agent` on its own endpoint
+  (env `ATLAS_HOSTED_AGENT_NAME`; the pack's name, adopted in Phase 05). Until it exists the mode
+  answers with a typed `not_deployed` event.
 - `GET /api/health` probes the orchestrator at `${ATLAS_ORCHESTRATOR_URL}/api/health` and shows the
   "single-agent path" banner until it answers 200. Phase 06 must serve that route.
 - Cases live in the `cases` container (`/case_id`). Phase 07 adds `plan` with `status`, `risk`,
   `tier` and `blast_radius`; the approvals console and `POST /api/approvals/{case_id}` already
   enforce `can_approve` on exactly those fields.
+
+## 12. Hosted agent findings (Phase 05, 2026-09-19)
+
+Installed: `agent-framework-foundry-hosting` 1.0.0b260821, `azure-ai-agentserver-responses` 2.1.0,
+`azure-ai-projects` 2.6.1, azd extension `azure.ai.agents` 1.0.0-beta.15 (kept pinned; beta.16 is
+available and was deliberately not taken mid-build).
+
+### 12.1 The hosting surface
+
+`agent_framework_foundry_hosting.ResponsesHostServer(agent).run()` serves `POST /responses`
+(protocol `responses` 2.0.0) and `/readiness` on port 8088. It accepts any `SupportsAgentRun`, not
+only an `Agent`, which is how ATLAS keeps one definition: `atlas_hosted_agent.agent` is an adapter
+that builds the `atlas_agent` agent per request, so instructions are still read from Cosmos per
+request (CLAUDE.md 9.1). The server replays the conversation as `messages` on every request (and
+passes request `options` only to a `RawAgent`), so the adapter runs the inner agent without a
+session and decides triage vs prose from whether an assistant message exists. The platform injects
+`FOUNDRY_PROJECT_ENDPOINT`, `FOUNDRY_AGENT_NAME/VERSION`, `AZURE_AI_MODEL_DEPLOYMENT_NAME`,
+`APPLICATIONINSIGHTS_CONNECTION_STRING`; the agent server exports telemetry itself, so the entry
+point only calls `enable_instrumentation()` and never `configure_azure_monitor()`.
+
+### 12.2 Packaging: code deploy, remote build, workspace packages as source
+
+`atlas_agent` and `atlas_common` are uv workspace members, not published packages, so a cloud
+`pip install` cannot resolve them. `scripts/package_hosted_agent.py` stages
+`agents/src/atlas-incident-agent/`: `main.py`, the three packages copied as plain source (instruction
+files included), and `requirements.txt` exported from `uv.lock --frozen`, exact pins only. Foundry
+installs the requirements (`dependencyResolution: remote_build`). No Docker, no duplicated agent code.
+The `agent-framework` meta-package pulled every integration (212 packages); `atlas_agent` and
+`atlas_orchestrator` now depend on `agent-framework-core==1.18.0` (108 packages, same imports,
+all 93 tests green).
+
+### 12.3 azd quirks
+
+- Git Bash rewrites `--project-id /subscriptions/...` into a Windows path; run with
+  `MSYS_NO_PATHCONV=1`.
+- `azd ai agent init --project-id` writes `USE_EXISTING_AI_PROJECT`, `AZD_AGENT_SKIP_ACR`,
+  `AZD_FOUNDRY_ACR_MODE=none` and account/project names into the env; `scripts/seed_agents_env.sh`
+  now writes the same, and MERGES into the file: `azd deploy` records `AGENT_<SERVICE>_*` there and
+  `azd ai agent monitor/show` stop working if they are overwritten.
+- **`${VAR}` is not substituted inside `policies`** (the docs say it is). Version 1 stored the
+  literal `${ATLAS_RAI_POLICY_ID}` as its `rai_policy_name` - per the docs a nonexistent policy
+  fails open, i.e. no content filtering. Fixed with a `$ref` to a file the staging script writes
+  with the resolved ARM id; `scripts/hosted_agent.py check-guardrail` and `verify_phase05` assert
+  every pinned version's policy resolves and exists. Version 1 was deleted.
+- `azd deploy` skips an unchanged service (8 s, no new version). A new version needs a real change.
+
+### 12.4 A packaged layout broke `.env.local` discovery
+
+`load_local_env()` assumed `parents[3]` of `config.py` is the repo root. In the hosted zip it is
+`/app/atlas_common/config.py`, so startup raised `IndexError` and every invocation returned
+`424 session_not_ready` (read with `azd ai agent monitor -s <session> -t console`). It now returns
+when the layout is not the repo's. Version 2 had the bug and was deleted (`delete_version(force=True)`
+cascades its idle sessions; without `force` it fails while sessions exist).
+
+### 12.5 Identity and access
+
+Each hosted agent gets an Entra agent identity (`AgentDetails.instance_identity.principal_id`),
+stable across versions. It can call the model through the project by default; ATLAS grants it
+Cosmos DB Built-in Data **Reader**, Search Index Data Reader and Cognitive Services OpenAI User
+(embeddings) in `rbac.bicep`, driven by `ATLAS_HOSTED_AGENT_PRINCIPAL_ID` which
+`scripts/hosted_agent.py record-identity` writes after the first deploy. Read-only is enough: every
+tool is read-only and the platform keeps conversation history. The entry point uses
+`DefaultAzureCredential`, the documented path for the platform-managed identity (not a
+user-assigned identity we could name), injectable for the Phase 09 swap to the ops API.
+
+### 12.6 Versions, pinning, rollback
+
+The endpoint's default version selector routes to `@latest`. Pinning is
+`agents.update_details(name, agent_endpoint=AgentEndpointConfig(version_selector=VersionSelector(
+[FixedRatioVersionSelectionRule(agent_version=v, traffic_percentage=100)])))` - seconds, no deploy
+(CLAUDE.md 9.2). Pins survive later deploys (a new version does not take traffic until pinned).
+`scripts/rollback_agent.sh` pins the highest earlier version that is active and has a resolvable
+guardrail; verified 4 -> 3 and back. Version status comes back as an enum
+(`AgentVersionStatus.ACTIVE`); compare its `.value`.
+
+### 12.7 Latency: sandbox start, and reusing it
+
+Each new hosted session starts a sandbox: first triage about 28-38 s. Reusing the session
+(`extra_body={"agent_session_id": ...}` from the `x-agent-session-id` response header) gives
+13-17 s, on par with the ACA app. The agent keeps no state in its sandbox, so the web app starts new
+conversations on the most recent warm sandbox, and retries once without it if it has expired.
+
+### 12.8 Toolbox
+
+`project.toolboxes.create_version(name, tools=[AzureAISearchToolboxTool(...)])` then
+`toolboxes.update(name, default_version=v)`. Consumers use the default-version endpoint
+`{project}/toolboxes/atlas-tools/mcp?api-version=v1`. A prompt agent attaches it server-side as an
+`MCPTool` with a `RemoteTool` project connection (`azd ai connection create --kind remote-tool
+--auth-type user-entra-token --audience https://ai.azure.com`); verified end to end (the prompt
+agent answers RB-0042 through the toolbox). Not declared as an `azure.ai.toolbox` azd service:
+its `azure_ai_search` tool must name an azd-managed connection, and ATLAS's search connection is
+owned by Bicep - one owner per resource.
+
+### 12.9 Container Apps: rollouts need node headroom
+
+A web deploy sat in `Activating` for over 10 minutes: the new revision's second replica had no
+node. The D4 profile was capped at 3 nodes (12 vCPU) and a rollout runs old and new replicas
+side by side next to the orchestrator placeholder (2 x 2 vCPU), the worker and Easy Auth sidecars.
+`maximumCount` is now 6; `azd deploy` reported success regardless, which is why
+`verify_phase04` checks `latestRevisionName == latestReadyRevisionName`.

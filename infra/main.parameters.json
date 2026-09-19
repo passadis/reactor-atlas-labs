@@ -23,6 +23,7 @@
     "webAppClientId": { "value": "${ATLAS_WEB_APP_CLIENT_ID=}" },
     "webImage": { "value": "${SERVICE_WEB_IMAGE_NAME=}" },
     "orchestratorImage": { "value": "${SERVICE_ORCHESTRATOR_IMAGE_NAME=}" },
-    "workerImage": { "value": "${SERVICE_WORKER_IMAGE_NAME=}" }
+    "workerImage": { "value": "${SERVICE_WORKER_IMAGE_NAME=}" },
+    "hostedAgentPrincipalId": { "value": "${ATLAS_HOSTED_AGENT_PRINCIPAL_ID=}" }
   }
 }

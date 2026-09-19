@@ -41,18 +41,7 @@ RG="$(get AZURE_RESOURCE_GROUP)"
 # The agents azd project references the ALREADY PROVISIONED Foundry project by endpoint rather than
 # creating its own. This is the seam that lets Bicep own the project while microsoft.foundry owns
 # the agent. See agents/README.md.
-AGENTS_ENV_DIR="agents/.azure/${ENV_NAME}"
-mkdir -p "$AGENTS_ENV_DIR"
-{
-  echo "AZURE_ENV_NAME=${ENV_NAME}"
-  echo "AZURE_LOCATION=$(get AZURE_LOCATION)"
-  echo "AZURE_SUBSCRIPTION_ID=$(get AZURE_SUBSCRIPTION_ID)"
-  echo "AZURE_RESOURCE_GROUP=${RG}"
-  echo "FOUNDRY_PROJECT_ENDPOINT=${PROJECT_ENDPOINT}"
-  echo "AZURE_AI_MODEL_DEPLOYMENT_NAME=$(get FOUNDRY_MODEL_DEPLOYMENT)"
-  echo "APPLICATIONINSIGHTS_CONNECTION_STRING=$(get APPLICATIONINSIGHTS_CONNECTION_STRING)"
-} > "${AGENTS_ENV_DIR}/.env"
-echo "postprovision: wrote ${AGENTS_ENV_DIR}/.env"
+AZURE_ENV_NAME="$ENV_NAME" bash scripts/seed_agents_env.sh
 
 # --- 3. wait for role-assignment propagation --------------------------------
 # Poll something that actually needs a data-plane role rather than sleeping blindly. Cosmos is the

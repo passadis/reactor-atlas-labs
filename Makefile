@@ -122,6 +122,34 @@ screenshots: ## Capture fallback-deck screenshots of the deployed app into docs/
 verify-phase04: ## Verify the deployed web app: auth, health, SSE, cancellation, tracing
 	bash scripts/verify_phase04.sh
 
+# ---------------------------------------------------------------- Phase 05 --
+.PHONY: hosted-deploy
+hosted-deploy: ## Stage the hosted agent (atlas_agent + adapter) and deploy a new version to Foundry
+	$(PY) -m scripts.package_hosted_agent
+	azd deploy -C agents atlas-incident-agent --no-prompt
+	$(PY) -m scripts.hosted_agent check-guardrail
+
+.PHONY: hosted-status
+hosted-status: ## Hosted agent versions, pinned version, guardrail and identity
+	$(PY) -m scripts.hosted_agent status
+
+.PHONY: hosted-pin
+hosted-pin: ## Pin the hosted agent to VERSION (pointer flip, no deploy): make hosted-pin VERSION=4
+	bash scripts/pin_agent_version.sh $(VERSION)
+
+.PHONY: hosted-rollback
+hosted-rollback: ## Roll the hosted agent back to the previous good version
+	bash scripts/rollback_agent.sh
+
+.PHONY: toolbox
+toolbox: ## Create or update the atlas-tools toolbox and re-attach it to the prompt agent
+	$(PY) -m scripts.upsert_toolbox
+	$(PY) -m scripts.create_prompt_agent
+
+.PHONY: verify-phase05
+verify-phase05: ## Verify hosted agent, guardrail, identity, web equivalence, traces, rollback
+	bash scripts/verify_phase05.sh
+
 # ---------------------------------------------------------------- Phase 12 --
 .PHONY: eval
 eval: ## Run the evaluation suite and write a scorecard (Phase 12)

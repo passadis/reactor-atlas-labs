@@ -29,20 +29,14 @@ from atlas_agent.instructions import packaged_text
 from atlas_common.auth import get_credential
 from atlas_common.config import Settings
 from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import (
-    AISearchIndexResource,
-    AzureAISearchQueryType,
-    AzureAISearchTool,
-    AzureAISearchToolResource,
-    PromptAgentDefinition,
-    RaiConfig,
-)
+from azure.ai.projects.models import MCPTool, PromptAgentDefinition, RaiConfig
 from azure.core.exceptions import ResourceNotFoundError
 
 from scripts.demo_agent_local import _console_utf8
+from scripts.upsert_toolbox import toolbox_endpoint
 
 PROMPT_AGENT_NAME = "atlas-triage-prompt"
-SEARCH_CONNECTION = "aisearch"
+TOOLBOX_CONNECTION = "atlas-tools-mcp"
 ARM = "https://management.azure.com"
 INSTRUCTIONS_VERSION = "v1"
 
@@ -53,8 +47,9 @@ PROMPT_AGENT_ADDENDUM = """
 
 ## 9. This deployment
 
-You are running as a Foundry prompt agent. Your only tool is the Azure AI Search knowledge
-index (runbooks, past incidents and postmortems). You cannot look up services, changes, telemetry
+You are running as a Foundry prompt agent. Your only tools come from the shared `atlas-tools`
+toolbox; today that is the knowledge index (runbooks, past incidents and postmortems).
+You cannot look up services, changes, telemetry
 or blast radius in this deployment. When a step in section 2 needs one of those, say which check
 you could not perform and lower your confidence; never fill the gap from memory. Answer in prose,
 and cite runbook and incident ids from the retrieved documents.
@@ -89,25 +84,24 @@ def assert_rai_policy_exists(policy_id: str) -> None:
 
 
 def build_definition(settings: Settings, connection_id: str) -> PromptAgentDefinition:
+    """The prompt agent: v1 instructions, the `atlas-tools` toolbox, the atlas-strict guardrail.
+
+    Tools come from the shared toolbox over MCP (Phase 05), not from a tool configured on this
+    agent: when Episode 3 adds the ops MCP server to `atlas-tools`, this agent gains it with no
+    change here. `connection_id` is the `atlas-tools-mcp` RemoteTool connection, which carries the
+    caller's Entra token to the toolbox endpoint.
+    """
     now = settings.ops_now.strftime("%Y-%m-%d %H:%M UTC")
     instructions = packaged_text(INSTRUCTIONS_VERSION).replace("{now}", now) + PROMPT_AGENT_ADDENDUM
     return PromptAgentDefinition(
         model=settings.model_main,
         instructions=instructions,
         tools=[
-            AzureAISearchTool(
-                azure_ai_search=AzureAISearchToolResource(
-                    indexes=[
-                        AISearchIndexResource(
-                            project_connection_id=connection_id,
-                            index_name=settings.knowledge_index,
-                            # Hybrid needs the index's integrated vectorizer (search_index.py),
-                            # which embeds the query as the Search service's own identity.
-                            query_type=AzureAISearchQueryType.VECTOR_SEMANTIC_HYBRID,
-                            top_k=5,
-                        )
-                    ]
-                )
+            MCPTool(
+                server_label="atlas_tools",
+                server_url=toolbox_endpoint(settings),
+                project_connection_id=connection_id,
+                require_approval="never",
             )
         ],
         rai_config=RaiConfig(rai_policy_name=rai_policy_id(settings)),
@@ -130,7 +124,7 @@ def latest_version(project: AIProjectClient) -> Any | None:
 
 def ensure(project: AIProjectClient, settings: Settings) -> tuple[Any, bool]:
     """Return (latest version, created). Creates a version only when the fingerprint changed."""
-    connection_id = project.connections.get(SEARCH_CONNECTION).id
+    connection_id = project.connections.get(TOOLBOX_CONNECTION).id
     definition = build_definition(settings, connection_id)
     sha = fingerprint(definition)
     current = latest_version(project)
@@ -181,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
         endpoint=settings.foundry_project_endpoint, credential=get_credential()
     )
     if args.check:
-        connection_id = project.connections.get(SEARCH_CONNECTION).id
+        connection_id = project.connections.get(TOOLBOX_CONNECTION).id
         expected = fingerprint(build_definition(settings, connection_id))
         current = latest_version(project)
         if current is None:

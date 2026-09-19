@@ -57,7 +57,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from .auth import Principal, check_bypass_at_startup, current_principal
 from .personas import Actor, PersonaResolver
-from .shapes import MODES, ShapeRunner
+from .shapes import HOSTED_AGENT_NAME, MODES, ShapeRunner
 from .stores import CaseStore, TurnStore
 
 log = logging.getLogger("atlas.web")
@@ -146,8 +146,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         timeout=60,
         max_retries=1,
     )
-    state.shapes = ShapeRunner(state.runtime, state.turns, state.cases, foundry_openai,
-                               state.project.get_openai_client())
+    state.shapes = ShapeRunner(
+        state.runtime, state.turns, state.cases, foundry_openai,
+        state.project.get_openai_client(),
+        # The hosted agent is invoked on its own endpoint (/agents/<name>/endpoint/...).
+        state.project.get_openai_client(agent_name=HOSTED_AGENT_NAME),
+    )
     state.http = httpx.AsyncClient(timeout=HEALTH_TIMEOUT_S)
     app.state.atlas = state
     try:
