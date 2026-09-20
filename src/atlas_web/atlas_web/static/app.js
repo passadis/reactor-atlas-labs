@@ -291,12 +291,182 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#message").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#composer").requestSubmit(); }
   });
+  $("#orch-mode").addEventListener("change", loadGraph);
+  $("#run-workflow").addEventListener("click", () => {
+    const text = $("#message").value.trim() || document.querySelector(".example").textContent.trim();
+    $("#message").value = "";
+    runWorkflow(text);
+  });
+  window.addEventListener("pagehide", () => { if (wf.es) wf.es.close(); });
+
   $("#m-session").textContent = state.sessionId || "-";
   loadMe();
   loadInstructions();
+  loadGraph();
   fetch("/api/health").then((r) => r.json()).then((h) => {
     const orch = h.checks && h.checks.orchestrator;
     if (h.status !== "ok") banner("Some ATLAS dependencies are degraded. Answers may be limited.", true);
-    else if (orch && orch.status !== "ok") banner("Orchestrator unreachable: using the single-agent path.");
+    else if (orch && orch.status !== "ok") banner("Orchestrator unreachable: the chat path still works, the workflow does not.");
   }).catch(() => {});
 });
+
+// ------------------------------------------------------- workflow (Episode 2) --
+//
+// The graph is drawn from the orchestrator's own topology, not from a hand-drawn picture: if the
+// shape changes, this panel changes with it. Nodes are laid out in run order, with the concurrent
+// pair marked so the overlap is visible while it happens.
+const NODE_LABEL = {
+  intake: "intake", triage_agent: "triage", knowledge_agent: "knowledge",
+  impact_agent: "impact", aggregate: "aggregate", planner_agent: "planner", report: "report",
+  coordinator_agent: "coordinator",
+};
+const wf = { caseId: null, es: null, nodes: new Map(), started: 0, busy: false };
+
+function wfOrder(topology) {
+  // Walk the edges from the start node so the panel reflects the deployed graph, not this file.
+  const out = new Map();
+  (topology.edges || []).forEach((e) => {
+    if (!out.has(e.from)) out.set(e.from, []);
+    out.get(e.from).push(e.to);
+  });
+  // Breadth-first: a depth-first descent follows one branch of the fan-out all the way to
+  // `report` before coming back for the other, which puts the two parallel nodes far apart.
+  const start = (topology.nodes || []).find((n) => n.start);
+  const order = [];
+  const seen = new Set();
+  const queue = [start && start.id];
+  while (queue.length) {
+    const id = queue.shift();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    order.push(id);
+    (out.get(id) || []).forEach((next) => queue.push(next));
+  }
+  (topology.nodes || []).forEach((n) => { if (!seen.has(n.id)) { seen.add(n.id); order.push(n.id); } });
+  return order;
+}
+
+async function loadGraph() {
+  const mode = $("#orch-mode").value;
+  try {
+    const r = await fetch(`/api/workflow/graph?mode=${encodeURIComponent(mode)}`, { headers: headers() });
+    if (!r.ok) throw new Error(r.status);
+    const topology = await r.json();
+    $("#wf-mermaid-src").textContent = topology.mermaid || "-";
+    const fanIn = new Set((topology.edges || []).filter((e) => e.kind === "fanin").map((e) => e.from));
+    $("#wf-nodes").innerHTML = wfOrder(topology).map((id) => {
+      const node = (topology.nodes || []).find((n) => n.id === id) || {};
+      return `<li class="wf-node" data-node="${esc(id)}" data-kind="${esc(node.kind || "")}">
+        <span class="wf-dot"></span>
+        <span class="wf-name">${esc(NODE_LABEL[id] || id)}</span>
+        ${fanIn.has(id) ? '<span class="wf-tag" title="Runs concurrently with its sibling">parallel</span>' : ""}
+        ${node.kind === "deterministic" ? '<span class="wf-tag code">code</span>' : '<span class="wf-tag agent">agent</span>'}
+        <span class="wf-time"></span>
+      </li>`;
+    }).join("");
+  } catch (e) {
+    $("#wf-nodes").innerHTML = `<li class="wf-node err">Orchestrator unreachable.</li>`;
+  }
+}
+
+function wfNode(id) { return document.querySelector(`.wf-node[data-node="${CSS.escape(id)}"]`); }
+function wfMark(id, cls, text) {
+  const el = wfNode(id);
+  if (!el) return;
+  el.classList.remove("running", "done", "degraded");
+  el.classList.add(cls);
+  if (text != null) el.querySelector(".wf-time").textContent = text;
+}
+function wfReset() {
+  document.querySelectorAll(".wf-node").forEach((el) => {
+    el.classList.remove("running", "done", "degraded");
+    el.querySelector(".wf-time").textContent = "";
+  });
+  $("#wf-decisions").innerHTML = "";
+  ["#wf-case", "#wf-sev", "#wf-plan", "#wf-elapsed"].forEach((s) => ($(s).textContent = "-"));
+}
+
+async function runWorkflow(message) {
+  if (wf.busy) return;
+  wf.busy = true;
+  wfReset();
+  $("#run-workflow").disabled = true;
+  const mode = $("#orch-mode").value;
+  let start;
+  try {
+    const r = await fetch("/api/workflow", {
+      method: "POST", headers: headers(), body: JSON.stringify({ message, mode }),
+    });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body.detail || `The orchestrator refused the case (${r.status}).`);
+    }
+    start = await r.json();
+  } catch (e) {
+    banner(e.message, true);
+    wf.busy = false;
+    $("#run-workflow").disabled = false;
+    return;
+  }
+  wf.caseId = start.case_id;
+  wf.started = performance.now();
+  $("#wf-case").textContent = start.case_id;
+  const bot = addMessage("bot", `Workflow (${mode})`, `<div class="prose">Running the case through the workflow...</div>`);
+  const prose = bot.querySelector(".prose");
+
+  const es = new EventSource(`/api/workflow/${start.case_id}/stream`);
+  wf.es = es;
+  const done = () => {
+    es.close();
+    wf.busy = false;
+    wf.es = null;
+    $("#run-workflow").disabled = false;
+    $("#wf-elapsed").textContent = `${((performance.now() - wf.started) / 1000).toFixed(1)} s`;
+  };
+  es.addEventListener("executor_invoked", (e) => {
+    const d = JSON.parse(e.data);
+    if (d.node && wfNode(d.node)) wfMark(d.node, "running", "...");
+  });
+  es.addEventListener("node", (e) => {
+    const d = JSON.parse(e.data);
+    const p = d.data || {};
+    const tools = (p.tool_calls || []).length;
+    wfMark(d.node, p.ok ? "done" : "degraded",
+      `${(p.seconds ?? 0).toFixed ? p.seconds.toFixed(1) : p.seconds}s` + (tools ? ` / ${tools} tools` : ""));
+  });
+  es.addEventListener("report", (e) => {
+    const r = JSON.parse(e.data).data || {};
+    $("#wf-sev").textContent = r.severity || "-";
+    $("#wf-plan").textContent = r.plan_id ? `${r.plan_id} (${r.plan_steps} steps)` : "-";
+    wfMark("report", "done", "");
+    (r.decisions || []).forEach((d) => {
+      const li = document.createElement("li");
+      li.innerHTML = `<b>${esc(d.by)}</b> <code>${esc(d.rule)}</code> ${esc(d.detail)}`;
+      $("#wf-decisions").append(li);
+    });
+    const missing = (r.missing_analysis || []).length
+      ? `<p class="muted">Missing analysis: ${esc((r.missing_analysis || []).join(", "))}.</p>` : "";
+    prose.innerHTML = `<p><b>${esc(r.severity)}</b> - ${esc(r.headline || "")}</p>
+      <p>${esc(r.summary || "")}</p>${missing}
+      <p class="muted">${r.needs_human ? "Needs a human before anything runs." : "No human review required by policy."}</p>`;
+  });
+  es.addEventListener("restored", (e) => {
+    prose.textContent = "This case already ran. Showing its stored result.";
+    const d = (JSON.parse(e.data).data || {}).result || {};
+    if (d.severity) $("#wf-sev").textContent = d.severity;
+    done();
+  });
+  es.addEventListener("error", (e) => {
+    if (!e.data) return;
+    const d = JSON.parse(e.data);
+    bot.classList.add("err");
+    prose.textContent = (d.data && d.data.message) || d.message || "The workflow failed.";
+  });
+  es.addEventListener("end", done);
+  es.onerror = () => {
+    if (!wf.busy) return;
+    bot.classList.add("err");
+    if (!prose.textContent) prose.textContent = "The connection to the workflow dropped.";
+    done();
+  };
+}

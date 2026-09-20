@@ -375,6 +375,29 @@ resource orchestratorApp 'Microsoft.App/containerApps@2026-01-01' = {
             { name: 'ATLAS_COMMANDS_QUEUE', value: commandsQueueName }
             { name: 'ATLAS_ORCHESTRATION_MODE', value: 'graph' }
           ])
+          // The orchestrator opens Cosmos, Search and Foundry clients at startup, so the startup
+          // probe is given a long runway; liveness is deliberately slack because a replica running
+          // a case is busy, not dead.
+          probes: [
+            {
+              type: 'Liveness'
+              httpGet: { path: '/api/health', port: 8001 }
+              periodSeconds: 20
+              failureThreshold: 5
+            }
+            {
+              type: 'Readiness'
+              httpGet: { path: '/api/health', port: 8001 }
+              periodSeconds: 10
+              failureThreshold: 3
+            }
+            {
+              type: 'Startup'
+              httpGet: { path: '/api/health', port: 8001 }
+              periodSeconds: 5
+              failureThreshold: 24
+            }
+          ]
         }
       ]
       scale: {

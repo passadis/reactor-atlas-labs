@@ -150,6 +150,19 @@ toolbox: ## Create or update the atlas-tools toolbox and re-attach it to the pro
 verify-phase05: ## Verify hosted agent, guardrail, identity, web equivalence, traces, rollback
 	bash scripts/verify_phase05.sh
 
+# ---------------------------------------------------------------- Phase 06 --
+.PHONY: orchestrator-local
+orchestrator-local: ## Run the orchestrator locally against deployed Azure resources
+	$(PY) -m uvicorn atlas_orchestrator.api:app --reload --host 127.0.0.1 --port 8001
+
+.PHONY: graph
+graph: ## Print the live workflow graph as Mermaid (MODE=graph|sequential_only|handoff)
+	$(PY) -m scripts.print_graph --mode $(or $(MODE),graph)
+
+.PHONY: verify-phase06
+verify-phase06: ## Verify the deployed workflow: typed state, concurrency, all three modes, Mermaid
+	bash scripts/verify_phase06.sh
+
 # ---------------------------------------------------------------- Phase 12 --
 .PHONY: eval
 eval: ## Run the evaluation suite and write a scorecard (Phase 12)

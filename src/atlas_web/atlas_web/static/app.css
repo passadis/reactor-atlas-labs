@@ -95,3 +95,25 @@ textarea { width: 100%; background: var(--bg); color: var(--text); border: 1px s
 .page { max-width: 960px; margin: 0 auto; padding: 1.5rem; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 1rem 1.2rem; margin-bottom: 1rem; }
 .kbtext { white-space: pre-wrap; font-size: .95rem; }
+
+/* Episode 2 workflow panel. The node list is the graph: run order from the topology, state live. */
+.wf-controls { display: flex; gap: .5rem; align-items: end; margin-bottom: .5rem; }
+.wf-nodes { list-style: none; margin: 0 0 .75rem; padding: 0; }
+.wf-node { display: flex; align-items: center; gap: .4rem; padding: .2rem 0; font-size: .85rem; }
+.wf-node .wf-dot { width: .6rem; height: .6rem; border-radius: 50%; background: var(--line, #556);
+  flex: 0 0 auto; }
+.wf-node.running .wf-dot { background: #e0a030; animation: wf-pulse 1s ease-in-out infinite; }
+.wf-node.done .wf-dot { background: #3aa76d; }
+.wf-node.degraded .wf-dot { background: #c2453f; }
+.wf-node.err { color: #c2453f; }
+@keyframes wf-pulse { 50% { opacity: .35; } }
+.wf-name { min-width: 5.5rem; }
+.wf-time { margin-left: auto; opacity: .7; font-variant-numeric: tabular-nums; }
+.wf-tag { font-size: .68rem; padding: 0 .3rem; border-radius: .25rem; border: 1px solid currentColor;
+  opacity: .65; }
+.wf-tag.code { color: #6aa9d8; }
+.wf-tag.agent { color: #c08ad8; }
+.wf-decisions { margin: 0 0 .75rem; padding-left: 1.1rem; font-size: .8rem; }
+.wf-decisions li { margin-bottom: .2rem; }
+.wf-decisions code { font-size: .75rem; opacity: .8; }
+.wf-mermaid pre { font-size: .7rem; overflow-x: auto; white-space: pre; }

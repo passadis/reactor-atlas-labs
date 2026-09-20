@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import difflib
 import inspect
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import date, datetime, timedelta
 from typing import Any, Literal
 
@@ -425,8 +425,18 @@ class AtlasTools:
         )
 
     # -- registration --------------------------------------------------------------------------
-    def as_agent_tools(self) -> list[FunctionTool]:
-        """Wrap the bound methods as framework tools with explicit input schemas."""
+    @property
+    def services(self) -> ServiceRepository:
+        """The CMDB repository. `IntakeExecutor` resolves service ids against it, in plain code."""
+        return self._services
+
+    def as_agent_tools(self, names: Sequence[str] | None = None) -> list[FunctionTool]:
+        """Wrap the bound methods as framework tools with explicit input schemas.
+
+        `names` narrows the set, which is how the Phase 06 specialists stay narrow: the impact
+        agent cannot search knowledge, the knowledge agent cannot walk the dependency graph.
+        A tool a specialist does not hold is a tool it cannot misuse.
+        """
         specs: list[tuple[Callable[..., Awaitable[Any]], type[BaseModel]]] = [
             (self.lookup_service, LookupServiceInput),
             (self.get_incident, GetIncidentInput),
@@ -435,6 +445,11 @@ class AtlasTools:
             (self.get_telemetry, GetTelemetryInput),
             (self.compute_blast_radius, ComputeBlastRadiusInput),
         ]
+        if names is not None:
+            unknown = sorted(set(names) - {f.__name__ for f, _ in specs})
+            if unknown:
+                raise ValueError(f"unknown tool names: {unknown}")
+            specs = [(f, s) for f, s in specs if f.__name__ in set(names)]
         tools: list[FunctionTool] = []
         for func, schema in specs:
             tools.append(

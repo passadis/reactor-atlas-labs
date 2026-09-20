@@ -8,6 +8,11 @@ Routes (Phase 04 contract):
     POST /api/chat                  start a turn -> {turn_id, session_id}
     GET  /api/chat/{turn_id}/stream SSE: meta, token, tool_start, tool_end, structured, error, done
     GET  /api/cases/{case_id}       case detail
+    POST /api/workflow              start a multi-agent case -> {case_id}     (Phase 06)
+    GET  /api/workflow/{id}/stream  SSE: node, executor_*, report, error, end (Phase 06)
+    GET  /api/workflow/{id}         typed workflow state + decision log       (Phase 06)
+    GET  /api/workflow/graph        workflow topology as JSON and Mermaid     (Phase 06)
+    POST /api/workflow/{id}/ask     handoff follow-up turn                    (Phase 06)
     GET  /api/approvals             plans awaiting approval
     POST /api/approvals/{case_id}   approve / reject - Entra role AND entitlement, server side
     GET  /api/health                liveness + dependency probe (the only unauthenticated route)
@@ -64,6 +69,10 @@ log = logging.getLogger("atlas.web")
 STATIC = resources.files("atlas_web") / "static"
 AGENT_VERSION = os.environ.get("ATLAS_VERSION", "dev")
 HEALTH_TIMEOUT_S = 5.0
+# The orchestrator runs four agents per case, so its client gets a long connect-and-read budget and
+# no read timeout at all while streaming: an SSE stream is idle by design between nodes.
+ORCHESTRATOR_TIMEOUT = httpx.Timeout(connect=10.0, read=600.0, write=30.0, pool=10.0)
+ORCHESTRATOR_STREAM_TIMEOUT = httpx.Timeout(connect=10.0, read=None, write=30.0, pool=10.0)
 CANCEL_POLL_S = 1.5
 
 
@@ -125,6 +134,7 @@ class State:
     search: SearchClient
     project: AIProjectClient
     http: httpx.AsyncClient
+    orchestrator: httpx.AsyncClient
 
 
 @asynccontextmanager
@@ -153,11 +163,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         state.project.get_openai_client(agent_name=HOSTED_AGENT_NAME),
     )
     state.http = httpx.AsyncClient(timeout=HEALTH_TIMEOUT_S)
+    state.orchestrator = httpx.AsyncClient(
+        base_url=os.environ.get("ATLAS_ORCHESTRATOR_URL", ""), timeout=ORCHESTRATOR_TIMEOUT,
+    )
     app.state.atlas = state
     try:
         yield
     finally:
         await state.http.aclose()
+        await state.orchestrator.aclose()
         await state.search.close()
         await state.project.close()
         await state.runtime.close()
@@ -195,6 +209,17 @@ class ChatRequest(BaseModel):
     session_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{6,64}$")
     mode: Literal["app", "model", "prompt", "hosted"] = "app"
     instructions: Literal["v0", "v1"] | None = None
+
+
+class WorkflowRequest(BaseModel):
+    """Start a multi-agent case. `mode` picks the orchestration shape, not the system's ability."""
+
+    message: str = Field(min_length=8, max_length=4000)
+    mode: Literal["graph", "sequential_only", "handoff"] = "graph"
+
+
+class AskRequest(BaseModel):
+    question: str = Field(min_length=3, max_length=1000)
 
 
 class ApprovalRequest(BaseModel):
@@ -352,6 +377,110 @@ def _routes(app: FastAPI) -> None:
             await state.turns.update(turn, cancel_requested=True)
         return {"turn_id": turn_id, "status": turn.get("status"), "cancel_requested": True}
 
+    # -- workflow (Episode 2) ------------------------------------------------------------------
+    #
+    # A thin proxy. The orchestrator has no external ingress and no sign-in of its own, so the web
+    # app is the only way in: it authenticates the user, checks the same entitlement that gates
+    # chat, then forwards. The full event set is passed through untouched - scope is a view filter
+    # in the browser (CLAUDE.md section 8), so filtering here would break the Episode 1 encore.
+    def orchestrator_url() -> str:
+        url = os.environ.get("ATLAS_ORCHESTRATOR_URL", "")
+        if not url:
+            raise HTTPException(503, "The workflow orchestrator is not configured.")
+        return url
+
+    @app.post("/api/workflow", status_code=202)
+    async def start_case(body: WorkflowRequest, request: Request,
+                         actor: ActorDep) -> dict[str, Any]:
+        decision = can_chat(actor.principal.app_roles)
+        if not decision.allowed:
+            raise HTTPException(403, decision.reason)
+        orchestrator_url()
+        try:
+            response = await atlas(request).orchestrator.post(
+                "/cases",
+                json={"report": body.message, "mode": body.mode,
+                      "raised_by": {"email": actor.principal.email, "persona": actor.persona_role}},
+                headers={"traceparent": current_traceparent() or ""},
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            log.warning("orchestrator refused a case: %s", exc)
+            raise HTTPException(503, "I could not reach the workflow orchestrator.") from exc
+        return dict(response.json())
+
+    @app.get("/api/workflow/{case_id}/stream")
+    async def stream_case(case_id: str, request: Request, _: ActorDep) -> EventSourceResponse:
+        orchestrator_url()
+        state = atlas(request)
+
+        async def events() -> AsyncIterator[ServerSentEvent]:
+            try:
+                async with state.orchestrator.stream(
+                    "GET", f"/cases/{case_id}/stream",
+                    timeout=ORCHESTRATOR_STREAM_TIMEOUT,
+                    headers={"traceparent": current_traceparent() or ""},
+                ) as upstream:
+                    upstream.raise_for_status()
+                    event = ""
+                    async for line in upstream.aiter_lines():
+                        if line.startswith("event: "):
+                            event = line.removeprefix("event: ").strip()
+                        elif line.startswith("data: "):
+                            yield ServerSentEvent(event=event or "message",
+                                                  data=line.removeprefix("data: "))
+            except httpx.HTTPError as exc:
+                log.warning("workflow stream failed for %s: %s", case_id, exc)
+                yield _sse(UiEvent("error", {
+                    "message": "I lost the connection to the workflow orchestrator.",
+                    "reason": "degraded",
+                }))
+
+        return EventSourceResponse(events())
+
+    @app.get("/api/workflow/graph")
+    async def workflow_graph(request: Request, _: ActorDep,
+                             mode: str | None = None) -> dict[str, Any]:
+        orchestrator_url()
+        try:
+            response = await atlas(request).orchestrator.get(
+                "/graph", params={"mode": mode} if mode else None)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise HTTPException(503, "I could not reach the workflow orchestrator.") from exc
+        return dict(response.json())
+
+    @app.get("/api/workflow/{case_id}")
+    async def workflow_case(case_id: str, request: Request, _: ActorDep) -> dict[str, Any]:
+        orchestrator_url()
+        try:
+            response = await atlas(request).orchestrator.get(f"/cases/{case_id}")
+            if response.status_code == 404:
+                raise HTTPException(404, f"No case {case_id}.")
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise HTTPException(503, "I could not reach the workflow orchestrator.") from exc
+        return dict(response.json())
+
+    @app.post("/api/workflow/{case_id}/ask")
+    async def workflow_ask(case_id: str, body: AskRequest, request: Request,
+                           actor: ActorDep) -> dict[str, Any]:
+        decision = can_chat(actor.principal.app_roles)
+        if not decision.allowed:
+            raise HTTPException(403, decision.reason)
+        orchestrator_url()
+        try:
+            response = await atlas(request).orchestrator.post(
+                f"/cases/{case_id}/ask", json={"question": body.question},
+                headers={"traceparent": current_traceparent() or ""},
+            )
+            if response.status_code == 404:
+                raise HTTPException(404, f"No case {case_id}.")
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise HTTPException(503, "I could not reach the workflow orchestrator.") from exc
+        return dict(response.json())
+
     # -- cases ---------------------------------------------------------------------------------
     @app.get("/api/cases/{case_id}")
     async def get_case(case_id: str, request: Request, _: ActorDep) -> dict[str, Any]:
@@ -486,7 +615,9 @@ def _routes(app: FastAPI) -> None:
             if not url:
                 return "not configured"
             response = await state.http.get(f"{url}/api/health")
-            return f"HTTP {response.status_code} (single-agent path until Phase 06)"
+            body = response.json()
+            return (f"HTTP {response.status_code}, default mode "
+                    f"{body.get('mode')}, modes {body.get('modes')}")
 
         await asyncio.gather(
             probe("cosmos", True, cosmos()),

@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ATLAS - Contoso incident copilot</title>
+  <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -80,7 +81,30 @@
 
       <section class="panel" data-scope="ep2" aria-label="Workflow">
         <h3>Workflow graph</h3>
-        <p class="muted">Live executor graph, typed state and checkpoints stream here (Phase 06/07).</p>
+        <div class="wf-controls">
+          <label class="ctl" title="Orchestration shape. Changes the graph, not the capability.">
+            Shape
+            <select id="orch-mode">
+              <option value="graph">Concurrent graph</option>
+              <option value="sequential_only">Sequential only</option>
+              <option value="handoff">Handoff</option>
+            </select>
+          </label>
+          <button type="button" id="run-workflow" class="ghost">Run in workflow</button>
+        </div>
+        <ol id="wf-nodes" class="wf-nodes"></ol>
+        <dl class="meta" id="wf-meta">
+          <dt>Case</dt><dd id="wf-case">-</dd>
+          <dt>Severity</dt><dd id="wf-sev">-</dd>
+          <dt>Plan</dt><dd id="wf-plan">-</dd>
+          <dt>Elapsed</dt><dd id="wf-elapsed">-</dd>
+        </dl>
+        <h4>Decision log <span class="muted">(deterministic code only)</span></h4>
+        <ol id="wf-decisions" class="wf-decisions"></ol>
+        <details class="wf-mermaid">
+          <summary>Mermaid source</summary>
+          <pre id="wf-mermaid-src">-</pre>
+        </details>
       </section>
       <section class="panel" data-scope="ep3" aria-label="Gateway and remediation">
         <h3>Gateway and remediation</h3>

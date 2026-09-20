@@ -835,3 +835,138 @@ node. The D4 profile was capped at 3 nodes (12 vCPU) and a rollout runs old and 
 side by side next to the orchestrator placeholder (2 x 2 vCPU), the worker and Easy Auth sidecars.
 `maximumCount` is now 6; `azd deploy` reported success regardless, which is why
 `verify_phase04` checks `latestRevisionName == latestReadyRevisionName`.
+
+---
+
+## 13. Multi-agent workflow findings (Phase 06, 2026-09-20)
+
+Verified against agent-framework 1.18.0 and agent-framework-orchestrations 1.1.1 by live probe.
+
+### 13.1 `WorkflowEvent.emit` and `type='data'` are deprecated
+
+The docstring in `agent_framework/_workflows/_events.py` says so directly: "deprecated alias for
+intermediate emissions ... Use `ctx.yield_output(...)` and configure `intermediate_output_from`
+instead. Will be removed in a future major release along with the `type='data'` event variant."
+
+So per-node progress is `await ctx.yield_output(NodeProgress(...))` from an executor listed in
+`WorkflowBuilder(intermediate_output_from=[...])`. The label is fixed at build time, not per yield:
+executors in `output_from` produce `type='output'`, executors in `intermediate_output_from` produce
+`type='intermediate'`, and an executor in neither has its yields **silently dropped**. That last
+one is the trap - a node that yields without being designated looks like a node that never ran.
+
+### 13.2 Event and builder surface, confirmed by probe
+
+- `WorkflowBuilder(start_executor=..., output_from=[...], intermediate_output_from=[...])`, then
+  `add_edge`, `add_fan_out_edges`, `add_fan_in_edges`, `add_chain`, `build`.
+- A fan-in target must handle **`list[T]`**, not `T`. Building with a `T` handler raises
+  `TypeCompatibilityError` at build time, which is the good outcome.
+- `Workflow.edge_groups` (not `edge_groups_by_source`), each with `source_executor_ids` /
+  `target_executor_ids`. Groups named `InternalEdgeGroup` with a `internal:` source prefix are the
+  runner's own delivery edges and are not part of the designed graph - filter them out or the
+  topology JSON shows seven phantom nodes.
+- `Workflow` exposes `executors`, `start_executor_id`, `name`, `edge_groups`, `to_dict`.
+- `WorkflowViz(workflow).to_mermaid()` renders a fan-in as its own diamond node
+  (`fan_in__aggregate__<hash>((fan-in))`), so a Mermaid validator must tolerate node ids it did not
+  see declared in `id["label"]` form.
+- The streaming overload of `Workflow.run` does **not** accept `include_status_events`; it is a
+  keyword of the non-streaming overload only. Runtime accepts it either way, `mypy --strict` does
+  not. We drop it and read the event types we need.
+
+### 13.3 `HandoffBuilder` requires `require_per_service_call_history_persistence=True`
+
+`build()` refuses otherwise, naming every participant: "a handoff short-circuits a tool call, and
+without this the local history diverges from the service's." It is an `Agent` constructor keyword,
+so `SpecialistFactory.build(..., for_handoff=True)` sets it. Nothing in the docs mentions it; the
+error message is the documentation.
+
+### 13.4 Handoff mode needs a typed sink, because the specialists cannot use `response_format`
+
+A handoff participant must be free to emit handoff tool calls, so it cannot be pinned to a
+structured output. Left alone, the handoff shape produces a transcript and no typed state, and
+Episode 2 cannot compare it with the graph.
+
+Resolution: each specialist gets a `record_<dimension>` tool whose schema **is** its output model,
+bound to the case (`graph.CaseRecorder`). The shape changes; the contract does not. Three findings
+from making it work, all of them live:
+
+- **The tool receives its arguments as parsed JSON.** Declaring `schema=RecordTriageInput` where
+  the field is `result: TriageResult` gives a correct nested JSON schema (`$defs` and all), but the
+  function is called with `result` as a **dict**. Validate explicitly with `model_validate`; a
+  handler typed `result: TriageResult` silently receives a dict.
+- **A second recording overwrote a good result with an empty one.** The coordinator re-routed to a
+  specialist that had already finished, and its thinner second answer replaced the first. The
+  recorder now writes once per dimension and says so in the tool result. Deterministic code owns
+  state; the model does not get to clobber it.
+- **The coordinator has no state except the transcript**, so it guesses what is still outstanding.
+  The `record_*` tool result now ends with the remaining order, computed from the recorder. That is
+  deterministic routing advice delivered through an agentic channel, and it removed the wasted laps.
+
+Specialist instructions also need a handoff addendum: their graph-mode rule is "return the model
+and nothing else", which in a conversation produces raw JSON in front of an engineer.
+
+### 13.4a The handoff mesh does not always finish, so deterministic code finishes it
+
+Even with the recorder and the routing advice, a live run ended with triage and knowledge recorded
+and **no impact analysis**: the coordinator burned its turn limit going round the mesh. The mesh is
+the least predictable of the three shapes by construction - the model chooses every hop.
+
+`CaseRunner._fill_gaps` now runs any specialist the mesh never reached, directly, in dependency
+order, and writes a `handoff-gap-filled` decision for each one. The agentic part is best effort;
+the state contract is not. This is the honest shape of the pattern rather than a workaround for it,
+and it is worth showing: the decision log says exactly which dimensions the mesh produced and which
+ones plain code had to go and get.
+
+### 13.4b An answer can satisfy the schema and still be useless
+
+A live run returned a `RemediationPlan` with a justification, citations, risk `high` - and **zero
+steps** - for a case where the knowledge agent had retrieved RB-0042. The schema was satisfied, so
+`response.value` returned happily and the case reached `plan_ready` with nothing to do.
+
+`AgentNode.invoke` now takes an optional `validate` callback, applied after a successful parse and
+wired into the same retry path as a schema failure: one retry with the problem appended, then the
+dimension degrades. `executors.usable()` holds the checks; there is exactly one so far, and it
+enforces what the planner's own instructions already said - zero steps is valid only when no
+runbook was found.
+
+The general lesson for structured outputs: `response_format` guarantees *shape*, never *substance*.
+Anything you would reject in review needs a check of its own.
+
+### 13.5 The shared client's tool budget is per agent run, and the default was too tight
+
+`function_invocation_configuration` carries `max_function_calls: 24` from Phase 03. The triage
+agent, told to look up "every service the report names or implies", enumerated the catalogue, hit
+the cap mid-run and reported "I am currently unable to use the incident systems" - which reads like
+an outage and is not one. Two changes: the orchestrator process raises the budget
+(`ORCHESTRATOR_INVOCATION_LIMITS`, 32 calls / 12 iterations / 120 s), and the triage instructions
+state a twelve-call budget. Triage went from 20 calls and 15.2 s to 10 calls and 10.1 s, with the
+same answer.
+
+### 13.5a A background run must be awaited before its clients close
+
+`run_sync` returned as soon as the event stream ended, but the stream is released from the driver's
+`finally` - so the driving task could still be finalising when the caller closed the runtime. Under
+the full test suite this surfaced as `RuntimeError: Event loop is closed` from an httpx transport,
+on a *different* test each run. `run_sync` now awaits `run.task`, and `CaseRunner.close()` cancels
+anything still in flight before the lifespan closes the clients.
+
+### 13.6 Two replicas plus in-memory runs needs a handoff point
+
+`POST /cases` and `GET /cases/{id}/stream` land on different replicas. So `POST` only writes a
+`pending` case to Cosmos and the run starts when a replica serves the stream; that replica owns the
+run and writes the final case back. `GET /cases/{id}` reads Cosmos, so it answers on any replica.
+This is a last-write-wins document, not a checkpoint - Phase 07 replaces it with
+`CosmosCheckpointStorage` and real suspend/resume.
+
+### 13.7 Model calibration, from live runs
+
+Two agent-quality problems that looked like code problems:
+
+- The impact agent listed the entire blast radius as `affected_service_ids` and hinted `Sev1` for a
+  20-percent degradation; the `severity=max(triage,impact)` rule then escalated the canonical case
+  to Sev1. The fix is in the contract, not the rule: `affected_service_ids` now means *observed*
+  degradation, and `severity_hint` has an explicit four-row calibration table.
+- The knowledge agent occasionally retrieved RB-0042 and then recorded an empty result, judging it
+  "not relevant enough". An empty answer is now only valid when the search itself came back empty.
+
+Both are worth saying out loud on stage: the deterministic rule was correct both times, and the
+thing that needed fixing was what the agent was asked to produce.

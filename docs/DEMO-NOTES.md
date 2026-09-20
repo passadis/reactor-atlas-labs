@@ -433,3 +433,116 @@ make verify-phase05           # 11 checks incl. rollback and re-pin, about 6 min
 | Hosted agent slow on the first call | Say "that is the sandbox starting" - it is. Or run the T-10 warm-up. |
 | Hosted agent errors (424 session_not_ready) | `azd ai agent monitor atlas-incident-agent -C agents -s <session> -t console`; switch to "This app" - same agent, same answer. |
 | Wrong version live | `make hosted-pin VERSION=4`. |
+
+---
+
+## Phase 06 - The multi-agent workflow (Episode 2, first half)
+
+Four specialists, three orchestration shapes, one typed state contract. The orchestrator runs on
+Container Apps with internal ingress only; the web app proxies to it at `/api/workflow/*`, so
+everything on stage goes through the same door the demo does.
+
+### The claim of this episode
+
+> Orchestration is a design decision, not a framework feature. The graph decides *when* agents run.
+> Plain code decides *what is allowed* - and you can see which is which, live, in the panel.
+
+The Workflow panel marks every node `code` or `agent`. Four of seven are code. The decision log
+underneath contains **only** entries written by deterministic executors - the agents never write to
+it.
+
+### What to show
+
+**Beat 1 - the graph is real.** Open `?scope=ep2`. The node list is drawn from
+`GET /api/workflow/graph`, which comes from the deployed workflow object, not a picture. Expand
+"Mermaid source" to show the same graph in text. `make graph MODE=handoff` prints it from the
+terminal if the panel is not up.
+
+**Beat 2 - run the canonical incident.** "Run in workflow" with the canonical report. Watch
+`knowledge` and `impact` light up together - that is the fan-out, and their two timings add up to
+more than the wall clock they share. Total is about 33-40 s.
+
+**Beat 3 - the decision log.** Scroll to the log. Every line names the rule:
+`severity=max(triage,impact)`, `tier1-in-blast-radius`, `affected=union(triage,impact)`. Point out
+that `severity` held at Sev2 because the rule was *evaluated* and said so - the log records the
+rule firing, not just the times it changed something.
+
+**Beat 4 - switch the shape, keep the contract.** Change Shape to "Sequential only" and run again.
+Same seven nodes, one straight line, same typed case at the end, a few seconds slower. Then
+"Handoff": a coordinator routes to each specialist, and the specialists write their results through
+`record_*` tools instead of a structured output. Different shape, identical `IncidentCase`.
+
+**Beat 5 - losing a specialist.** Say what happens when one dies: the case still completes, the
+report says `Missing analysis: impact`, and `needs_human` flips true. This is
+`tests/test_orchestrator_integration.py::test_a_dead_specialist_degrades_the_run_rather_than_killing_it`,
+and `make verify-phase06` runs it live as check 6.
+
+### Measured (deployed, eastus2, 2026-09-20)
+
+| Shape | End to end | Notes |
+|---|---|---|
+| `graph` (concurrent) | 32-40 s | knowledge and impact overlap |
+| `sequential_only` | 35-42 s | same nodes, one line |
+| `handoff` | 55-65 s | extra coordinator turn per hop |
+
+| Node | Typical |
+|---|---|
+| intake (code) | under 0.5 s |
+| triage_agent | 7-11 s, 6-10 tool calls |
+| knowledge_agent | 10-13 s |
+| impact_agent | 4-10 s |
+| aggregate (code) | under 0.01 s |
+| planner_agent | 13-17 s |
+| report (code) | under 0.01 s |
+
+Concurrency, from one run: knowledge 10.7 s, impact 4.3 s, branch wall clock 10.7 s - sequential
+would have been 15.0 s. That is the number to read out; the end-to-end comparison between two runs
+is **not** evidence, because model latency varies by more than the saving.
+
+### Commands
+
+```bash
+make graph                    # Mermaid for the default shape
+make graph MODE=handoff       # or sequential_only
+make orchestrator-local       # run the orchestrator locally against deployed Azure
+make verify-phase06           # 15 checks, about 5 minutes
+uv run --group ui python -m scripts.capture_phase06   # Episode 2 fallback screenshots
+```
+
+### Screenshots (fallback deck)
+
+`docs/assets/phase06-01-graph-idle.png`, `-02-graph-complete.png`, `-03-workflow-panel.png`,
+`-04-sequential.png`. Captured from the deployed app through real Entra auth; the capture script
+also fails on any console error, so it doubles as the panel's only browser test.
+
+### Fallbacks
+
+| If this fails live | Do this |
+|---|---|
+| Orchestrator unreachable | The banner says so and chat still works. Show the Episode 1 path and the screenshots. |
+| A run hangs past its beat | Nodes have a 90 s timeout and the run has 420 s; it will finish degraded rather than hang. Keep talking; the panel fills in. |
+| Handoff mode wanders | It is the least deterministic shape, by design - that is the point being made. Cut to `graph` and say why. |
+| Knowledge agent returns no runbook | Rerun once. If it repeats, show the decision log: the case still completed and the planner was told the procedure was missing. |
+
+### Two things worth saying out loud
+
+**The agentic part is best effort; the state contract is not.** The handoff mesh sometimes burns
+its turn limit before every specialist has reported. Rather than ship a half-analysed case,
+deterministic code runs whatever the mesh missed and writes a `handoff-gap-filled` line in the
+decision log. If the log shows one on stage, read it out - it is the pattern's real trade-off,
+visible live.
+
+**A schema-valid answer can still be useless.** The planner once returned a plan with citations, a
+justification and zero steps, for a case that had a runbook. `response_format` guarantees shape,
+never substance, so the planner node now checks for it and retries. See `docs/API-NOTES.md` 13.4b.
+
+**The model was wrong twice, and the fix was in the contract, not the code.** The impact agent first
+graded a 20-percent degradation `Sev1`, and the `max(triage, impact)` rule dutifully escalated the
+whole case. The rule was right; the agent's brief was vague. Same with the knowledge agent
+retrieving RB-0042 and then recording an empty result because it judged it "not relevant enough".
+Both fixes are three lines of instructions. See `docs/API-NOTES.md` 13.7.
+
+**Deterministic code guards state from the model.** In handoff mode a coordinator re-routed to a
+specialist that had already finished, and its thinner second answer silently replaced a good one.
+The recorder now writes once per dimension and tells the model it refused. That is the whole
+agentic/deterministic split in one bug.
