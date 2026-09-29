@@ -22,8 +22,17 @@ import logging
 from collections.abc import Sequence
 from typing import Any, Literal
 
-from agent_framework import Agent, FunctionTool, Workflow, WorkflowBuilder, WorkflowViz, tool
+from agent_framework import (
+    Agent,
+    CheckpointStorage,
+    FunctionTool,
+    Workflow,
+    WorkflowBuilder,
+    WorkflowViz,
+    tool,
+)
 from agent_framework_orchestrations import HandoffBuilder
+from atlas_common.models import Entitlement, Service
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .agents import (
@@ -35,6 +44,7 @@ from .agents import (
     TRIAGE,
     SpecialistFactory,
 )
+from .approval import ApprovalExecutor, PolicyGateExecutor
 from .executors import (
     AggregateExecutor,
     BranchNode,
@@ -44,6 +54,14 @@ from .executors import (
     record,
 )
 from .models import ImpactResult, IncidentCase, KnowledgeResult, RemediationPlan, TriageResult
+from .node_ids import (
+    AGGREGATE,
+    INTAKE,
+    REPORT,
+    WORKFLOW_APPROVAL_TAIL,
+    WORKFLOW_GRAPH,
+    WORKFLOW_SEQUENTIAL,
+)
 
 log = logging.getLogger("atlas.orchestrator")
 
@@ -63,28 +81,52 @@ def normalise_mode(value: str | None) -> Mode:
 # ----------------------------------------------------------------- the deterministic graph --
 
 
-def build_workflow(factory: SpecialistFactory, mode: Mode = "graph") -> Workflow:
-    """The `graph` and `sequential_only` shapes. Both end at the same report executor."""
+def build_workflow(
+    factory: SpecialistFactory,
+    mode: Mode = "graph",
+    *,
+    catalogue: dict[str, Service] | None = None,
+    entitlements: dict[str, Entitlement] | None = None,
+    checkpoint_storage: CheckpointStorage | None = None,
+) -> Workflow:
+    """The `graph` and `sequential_only` shapes, both ending at the same report executor.
+
+    Node ids come from `node_ids.py` and never vary, because the framework binds a checkpoint to
+    the graph that wrote it and refuses a restore into a different topology.
+
+    `catalogue` and `entitlements` feed the Phase 07 policy gate. Without them the gate and the
+    approval node are left out entirely and the workflow runs straight from the planner to the
+    report - which is what the Phase 06 tests and the topology endpoint use.
+    """
     runtime = factory.runtime
-    intake = IntakeExecutor(id="intake", services=runtime.tools.services)
+    intake = IntakeExecutor(id=INTAKE, services=runtime.tools.services)
     triage = ChainNode(id=TRIAGE, agent=factory.build(TRIAGE), output_model=TriageResult,
                        dimension="triage")
     planner = ChainNode(id=PLANNER, agent=factory.build(PLANNER), output_model=RemediationPlan,
                         dimension="plan")
-    aggregate = AggregateExecutor(id="aggregate")
-    report = ReportExecutor(id="report")
+    aggregate = AggregateExecutor(id=AGGREGATE)
+    report = ReportExecutor(id=REPORT)
+
+    gated = catalogue is not None and entitlements is not None
+    tail: list[Any] = [planner]
+    if gated:
+        tail.append(PolicyGateExecutor(catalogue=catalogue or {}, entitlements=entitlements or {}))
+        tail.append(ApprovalExecutor(entitlements=entitlements or {}))
+    tail.append(report)
 
     if mode == "sequential_only":
         knowledge = ChainNode(id=KNOWLEDGE, agent=factory.build(KNOWLEDGE),
                               output_model=KnowledgeResult, dimension="knowledge")
         impact = ChainNode(id=IMPACT, agent=factory.build(IMPACT), output_model=ImpactResult,
                            dimension="impact")
+        head = [intake, triage, knowledge, impact, aggregate]
         builder = WorkflowBuilder(
-            name="atlas-incident-sequential", start_executor=intake,
+            name=WORKFLOW_SEQUENTIAL, start_executor=intake,
+            checkpoint_storage=checkpoint_storage,
             output_from=[report],
-            intermediate_output_from=[intake, triage, knowledge, impact, aggregate, planner],
+            intermediate_output_from=[*head, *tail[:-1]],
         )
-        builder.add_chain([intake, triage, knowledge, impact, aggregate, planner, report])
+        builder.add_chain([*head, *tail])
         return builder.build()
 
     knowledge_b = BranchNode(id=KNOWLEDGE, agent=factory.build(KNOWLEDGE),
@@ -92,15 +134,41 @@ def build_workflow(factory: SpecialistFactory, mode: Mode = "graph") -> Workflow
     impact_b = BranchNode(id=IMPACT, agent=factory.build(IMPACT), output_model=ImpactResult,
                           dimension="impact")
     builder = WorkflowBuilder(
-        name="atlas-incident-graph", start_executor=intake,
+        name=WORKFLOW_GRAPH, start_executor=intake,
+        checkpoint_storage=checkpoint_storage,
         output_from=[report],
-        intermediate_output_from=[intake, triage, knowledge_b, impact_b, aggregate, planner],
+        intermediate_output_from=[intake, triage, knowledge_b, impact_b, aggregate, *tail[:-1]],
     )
     builder.add_edge(intake, triage)
     builder.add_fan_out_edges(triage, [knowledge_b, impact_b])
     builder.add_fan_in_edges([knowledge_b, impact_b], aggregate)
-    builder.add_edge(aggregate, planner)
-    builder.add_edge(planner, report)
+    builder.add_chain([aggregate, *tail])
+    return builder.build()
+
+
+def build_approval_tail(
+    *,
+    catalogue: dict[str, Service],
+    entitlements: dict[str, Entitlement],
+    checkpoint_storage: CheckpointStorage | None = None,
+) -> Workflow:
+    """`policy_gate -> approval -> report`, as a workflow of its own.
+
+    The handoff shape builds its typed case in a conversational mesh, which has no gated graph to
+    suspend in. Without this, a handoff case skipped the policy gate entirely and went straight to
+    a report - caught by `verify_phase06` after Phase 07 landed. Feeding the finished case through
+    the same three nodes gives the handoff shape the same authorization, the same durable
+    suspension and the same cold resume as the graph.
+    """
+    gate = PolicyGateExecutor(catalogue=catalogue, entitlements=entitlements)
+    approval = ApprovalExecutor(entitlements=entitlements)
+    report = ReportExecutor(id=REPORT)
+    builder = WorkflowBuilder(
+        name=WORKFLOW_APPROVAL_TAIL, start_executor=gate,
+        checkpoint_storage=checkpoint_storage,
+        output_from=[report], intermediate_output_from=[gate, approval],
+    )
+    builder.add_chain([gate, approval, report])
     return builder.build()
 
 
@@ -323,6 +391,7 @@ __all__ = [
     "MODES",
     "CaseRecorder",
     "Mode",
+    "build_approval_tail",
     "build_handoff_workflow",
     "build_workflow",
     "mermaid",

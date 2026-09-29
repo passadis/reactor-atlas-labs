@@ -292,6 +292,8 @@ document.addEventListener("DOMContentLoaded", () => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#composer").requestSubmit(); }
   });
   $("#orch-mode").addEventListener("change", loadGraph);
+  $("#wf-approve").addEventListener("click", () => decide("approve"));
+  $("#wf-reject").addEventListener("click", () => decide("reject"));
   $("#run-workflow").addEventListener("click", () => {
     const text = $("#message").value.trim() || document.querySelector(".example").textContent.trim();
     $("#message").value = "";
@@ -320,7 +322,8 @@ const NODE_LABEL = {
   impact_agent: "impact", aggregate: "aggregate", planner_agent: "planner", report: "report",
   coordinator_agent: "coordinator",
 };
-const wf = { caseId: null, es: null, nodes: new Map(), started: 0, busy: false };
+const wf = { caseId: null, es: null, nodes: new Map(), started: 0, busy: false,
+             approval: null };
 
 function wfOrder(topology) {
   // Walk the edges from the start node so the panel reflects the deployed graph, not this file.
@@ -383,6 +386,8 @@ function wfReset() {
     el.querySelector(".wf-time").textContent = "";
   });
   $("#wf-decisions").innerHTML = "";
+  $("#wf-approval").hidden = true;
+  wf.approval = null;
   ["#wf-case", "#wf-sev", "#wf-plan", "#wf-elapsed"].forEach((s) => ($(s).textContent = "-"));
 }
 
@@ -434,6 +439,17 @@ async function runWorkflow(message) {
     wfMark(d.node, p.ok ? "done" : "degraded",
       `${(p.seconds ?? 0).toFixed ? p.seconds.toFixed(1) : p.seconds}s` + (tools ? ` / ${tools} tools` : ""));
   });
+  es.addEventListener("approval_required", (e) => {
+    showApproval(JSON.parse(e.data).data || {});
+    prose.innerHTML = `<p>Waiting on a human. The case is checkpointed - it survives a restart.</p>`;
+  });
+  es.addEventListener("resuming", (e) => {
+    const d = JSON.parse(e.data).data || {};
+    hideApproval(`Resuming: ${esc(d.approved ? "approved" : "rejected")} by ${esc(d.by || "")}.`);
+  });
+  es.addEventListener("awaiting_approval", () => {
+    hideApproval("Still waiting on a human. The case is checkpointed and resumable at any time.");
+  });
   es.addEventListener("report", (e) => {
     const r = JSON.parse(e.data).data || {};
     $("#wf-sev").textContent = r.severity || "-";
@@ -469,4 +485,63 @@ async function runWorkflow(message) {
     if (!prose.textContent) prose.textContent = "The connection to the workflow dropped.";
     done();
   };
+}
+
+// ------------------------------------------------- approval gate (Episode 2, second half) --
+//
+// The panel prints the policy gate's `reasons` verbatim. They are written by code, not by an
+// agent, so an approver is never reading the model's account of why it should be allowed to
+// proceed. Who is approving comes from the signed-in token, never from this page.
+function showApproval(request) {
+  wf.approval = request;
+  $("#wf-approval-roles").textContent =
+    request.required_roles && request.required_roles.length
+      ? `(${request.required_roles.join(" or ")})` : "";
+  $("#wf-approval-reasons").innerHTML = (request.reasons || [])
+    .map((r) => `<li>${esc(r)}</li>`).join("");
+  const expires = request.expires_at
+    ? `Expires ${new Date(request.expires_at).toLocaleTimeString()}. ` : "";
+  $("#wf-approval-plan").textContent =
+    `${expires}Plan ${request.plan_id} - ${request.destructive_steps} destructive step(s) on `
+    + `${(request.targets || []).join(", ")}, blast radius ${request.blast_radius}.\n`
+    + (request.plan_summary || []).join("\n");
+  $("#wf-approval-note").textContent = "";
+  $("#wf-approval").hidden = false;
+  $("#wf-comment").focus();
+}
+
+function hideApproval(note) {
+  $("#wf-approval").hidden = true;
+  if (note) $("#wf-approval-note").textContent = note;
+}
+
+async function decide(decision) {
+  if (!wf.approval) return;
+  const comment = $("#wf-comment").value.trim();
+  if (comment.length < 3) {
+    $("#wf-approval-note").textContent = "A comment is required: a decision without a reason is not an audit trail.";
+    return;
+  }
+  const caseId = wf.approval.case_id;
+  $("#wf-approve").disabled = true;
+  $("#wf-reject").disabled = true;
+  try {
+    const r = await fetch(`/api/workflow/${caseId}/decision`, {
+      method: "POST", headers: headers(), body: JSON.stringify({ decision, comment }),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      // A refusal is part of the demo, not an error: the signed-in persona may not be allowed to
+      // approve this particular plan, and the case stays parked.
+      $("#wf-approval-note").textContent = body.detail || `Refused (${r.status}).`;
+      return;
+    }
+    $("#wf-comment").value = "";
+    hideApproval(`${decision === "approve" ? "Approved" : "Rejected"}; the case is resuming from its checkpoint.`);
+  } catch (e) {
+    $("#wf-approval-note").textContent = "Could not reach ATLAS. The case is checkpointed and still resumable.";
+  } finally {
+    $("#wf-approve").disabled = false;
+    $("#wf-reject").disabled = false;
+  }
 }

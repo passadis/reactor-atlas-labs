@@ -117,3 +117,13 @@ textarea { width: 100%; background: var(--bg); color: var(--text); border: 1px s
 .wf-decisions li { margin-bottom: .2rem; }
 .wf-decisions code { font-size: .75rem; opacity: .8; }
 .wf-mermaid pre { font-size: .7rem; overflow-x: auto; white-space: pre; }
+
+/* Episode 2 approval gate. The reasons are the gate's own words, printed verbatim. */
+.wf-approval { border: 1px solid #c08a3a; border-radius: .4rem; padding: .6rem; margin: .5rem 0; }
+.wf-approval h4 { margin: 0 0 .4rem; }
+.wf-reasons { margin: 0 0 .5rem; padding-left: 1.1rem; font-size: .82rem; }
+.wf-reasons li { margin-bottom: .15rem; }
+.wf-plan { font-size: .78rem; opacity: .85; margin-bottom: .5rem; white-space: pre-wrap; }
+.wf-approval-actions { display: flex; gap: .5rem; margin-top: .4rem; }
+.wf-approval .ctl { display: block; margin-bottom: .3rem; }
+.wf-approval input[type="text"] { width: 100%; }

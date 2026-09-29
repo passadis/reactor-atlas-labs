@@ -19,11 +19,21 @@ from typing import Any
 import pytest
 from atlas_agent.factory import IncidentAgentRuntime
 from atlas_common.config import Settings, load_local_env
+from atlas_common.repositories.cosmos_repos import EntitlementRepository
 from atlas_orchestrator.agents import IMPACT, KNOWLEDGE, PLANNER, TRIAGE, SpecialistFactory
+from atlas_orchestrator.approval import ApprovalResponse
 from atlas_orchestrator.executors import BranchNode, IntakeRequest, NodeProgress
 from atlas_orchestrator.graph import build_workflow
-from atlas_orchestrator.models import ImpactResult, IncidentReport
+from atlas_orchestrator.models import (
+    ImpactResult,
+    IncidentCase,
+    IncidentReport,
+    PolicyDecision,
+    RemediationPlan,
+    RemediationStep,
+)
 from atlas_orchestrator.runner import CaseRunner
+from atlas_orchestrator.tool_approval import ToolApprovalGate
 
 load_local_env()
 pytestmark = [
@@ -160,3 +170,141 @@ async def test_a_dead_specialist_degrades_the_run_rather_than_killing_it() -> No
     assert report.case.triage is not None, "losing impact must not lose triage"
     assert report.case.plan is not None, "losing impact must not lose the plan"
     assert any(d.rule == "degrade" for d in report.case.decisions)
+
+
+# ---------------------------------------------------- Phase 07: approval, live --
+
+
+async def test_the_canonical_incident_parks_on_a_human_with_reasons() -> None:
+    """The gate runs against the real catalogue and entitlements, and stops the case."""
+    async with IncidentAgentRuntime(Settings.from_env()) as runtime:
+        runner = CaseRunner(runtime, "graph")
+        await runner.load_reference_data()
+        assert runner.gated, "the policy gate did not load its reference data"
+        doc = await runner.create(CANONICAL, raised_by={"persona": "sre"})
+        case_id = str(doc["case_id"])
+
+        parked: dict[str, Any] = {}
+        async for event in runner.stream(case_id):
+            if event.kind == "approval_required":
+                parked = event.data
+                break
+        await runner.close()
+
+    assert parked, "the case never reached the approval gate"
+    assert parked["required_roles"], "nobody was named as an approver"
+    assert parked["reasons"], "the gate gave no reasons"
+    assert parked["plan_id"]
+    # Every reason is a sentence a human can act on, not a code.
+    assert all(len(r) > 20 for r in parked["reasons"]), parked["reasons"]
+
+
+async def test_a_parked_case_is_durable_and_finishes_from_its_checkpoint() -> None:
+    """Park a case, drop the runner entirely, then finish it from a brand-new one.
+
+    This is `kill_orchestrator.sh` without the ACA call: the object that started the case is gone
+    before the approval is given, and the case still completes.
+    """
+    async with IncidentAgentRuntime(Settings.from_env()) as runtime:
+        first = CaseRunner(runtime, "graph")
+        await first.load_reference_data()
+        doc = await first.create(CANONICAL, raised_by={"persona": "sre"})
+        case_id = str(doc["case_id"])
+        async for event in first.stream(case_id):
+            if event.kind == "approval_required":
+                break
+        assert first.checkpoints is not None
+        checkpoints = await first.checkpoints.list_checkpoints(
+            workflow_name=first.workflow_name("graph"))
+        parked = [c for c in checkpoints if c.pending_request_info_events]
+        await first.close()
+    assert parked, "nothing was checkpointed while the case was parked"
+
+    # A second runtime and a second runner: nothing survives except Cosmos.
+    async with IncidentAgentRuntime(Settings.from_env()) as runtime:
+        second = CaseRunner(runtime, "graph")
+        await second.load_reference_data()
+        outcome = await second.resume_from_checkpoint(
+            case_id,
+            response=ApprovalResponse(
+                approved=True, by="dana@contoso.com", role="director",
+                comment="Break-glass: payments rollback approved during an active Sev2."),
+        )
+        settled = await second.get(case_id)
+        await second.close()
+
+    assert outcome["path"] == "cold"
+    assert outcome["status"] == "approved", outcome
+    assert outcome["seconds"] < 30, f"a resume should be quick, took {outcome['seconds']}s"
+    state = (settled or {}).get("state", {})
+    assert state.get("approval", {}).get("accepted") is True
+    assert any(d["rule"] == "human-approved" for d in state.get("decisions", []))
+
+
+async def test_an_approval_that_lands_while_the_service_is_down_is_swept_up() -> None:
+    """Record the answer with nobody running the case, then let a fresh runner's sweep find it."""
+    async with IncidentAgentRuntime(Settings.from_env()) as runtime:
+        first = CaseRunner(runtime, "graph")
+        await first.load_reference_data()
+        doc = await first.create(CANONICAL, raised_by={"persona": "sre"})
+        case_id = str(doc["case_id"])
+        async for event in first.stream(case_id):
+            if event.kind == "approval_required":
+                break
+        # The answer arrives, but the service goes away before it can act on it.
+        await first.cases.record_answer(case_id, ApprovalResponse(
+            approved=True, by="dana@contoso.com", role="director",
+            comment="Approved while the orchestrator was restarting.").model_dump(mode="json"))
+        await first.close()
+
+    async with IncidentAgentRuntime(Settings.from_env()) as runtime:
+        second = CaseRunner(runtime, "graph")
+        await second.load_reference_data()
+        swept = await second.sweep()
+        settled = await second.get(case_id)
+        await second.close()
+
+    assert any(row.get("case_id") == case_id for row in swept), swept
+    assert (settled or {}).get("status") == "approved"
+
+
+async def test_tool_level_approval_holds_a_destructive_call() -> None:
+    """The second mechanism: the framework pauses one call, with its arguments visible."""
+    plan = RemediationPlan(
+        steps=[RemediationStep(order=1, action="Disable the payments rollout flag",
+                               target_service="svc-payments", command_ref="RB-0042#3",
+                               destructive=True, expected_result="Latency returns to baseline",
+                               rollback="Re-enable the flag")],
+        risk="high", estimated_minutes=10, justification="From RB-0042.",
+    ).with_plan_id("CASE-TOOLAPPR")
+    case = IncidentCase(
+        case_id="CASE-TOOLAPPR", report="Checkout is timing out.", status="approved", plan=plan,
+        policy=PolicyDecision(approval_required=True, required_approver_roles=["director"],
+                              plan_id=plan.plan_id),
+    )
+
+    async with IncidentAgentRuntime(Settings.from_env()) as runtime:
+        entitlements = {e.role: e for e in
+                        await EntitlementRepository(runtime.store).list_all()}
+        gate = ToolApprovalGate(case, entitlements)
+        response, session, pending = await gate.start(
+            runtime.client, f"Execute step 1 of plan {plan.plan_id}.")
+
+        assert pending, "the destructive tool ran without asking"
+        assert pending[0].tool_name == "execute_remediation"
+        assert plan.plan_id in pending[0].arguments
+        assert not gate.dispatcher.records, "the tool body ran before approval"
+
+        # The wrong role cannot release it.
+        _refused, note = await gate.release(response, session, approver_role="sre")
+        assert note.startswith("refused:"), note
+        assert not gate.dispatcher.records, "a refused approval still executed the tool"
+
+        # The right role can.
+        response2, session2, pending2 = await gate.start(
+            runtime.client, f"Execute step 1 of plan {plan.plan_id}.")
+        assert pending2
+        _released, note2 = await gate.release(response2, session2, approver_role="director")
+        assert note2 == "released", note2
+        assert gate.dispatcher.records, "an approved call never reached the tool"
+        assert gate.dispatcher.records[0].step == 1

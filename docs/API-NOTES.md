@@ -970,3 +970,210 @@ Two agent-quality problems that looked like code problems:
 
 Both are worth saying out loud on stage: the deterministic rule was correct both times, and the
 thing that needed fixing was what the agent was asked to produce.
+
+---
+
+## 14. Checkpointing, recovery and approval findings (Phase 07, 2026-09-21)
+
+Verified against agent-framework 1.18.0 and agent-framework-azure-cosmos 1.0.0b260910 by live
+probe. Every item here cost a debugging cycle, and every one of them fails *quietly*.
+
+### 14.1 The checkpoint hooks are async, and a failed checkpoint does not fail the run
+
+`Executor.on_checkpoint_save` and `on_checkpoint_restore` are **coroutines**. Override them
+synchronously and the framework logs, once per superstep:
+
+```
+Failed to create checkpoint at iteration 0: Executor gate on_checkpoint_save failed.
+Note that this does not fail the workflow run.
+```
+
+and carries on. The run completes, reports success, and **nothing is written at all**. The first
+probe for this phase did exactly that and produced zero checkpoints from a healthy-looking run.
+
+Consequences, all adopted:
+
+- The orchestrator probes the store at startup and puts the answer in `/api/health`
+  (`checkpoints: "ok, N checkpoint(s) for ..."`), so a broken store is loud before a demo.
+- `verify_phase07` counts checkpoints rather than trusting the run.
+- `scripts/inspect_checkpoints.py` says so explicitly when it finds none.
+
+### 14.2 `@response_handler` cannot read string annotations
+
+`@handler` resolves its annotations; `@response_handler` validates its `ctx` parameter with a raw
+`inspect.signature`, so under `from __future__ import annotations` it sees a *string* and refuses:
+
+```
+ValueError: Response handler parameter 'ctx' must be annotated as WorkflowContext,
+WorkflowContext[T], or WorkflowContext[T, U], got WorkflowContext[IncidentCase, NodeProgress]
+```
+
+Passing explicit types to the decorator does **not** help - `_validate_response_handler_signature`
+validates `ctx` even with `skip_annotations=True`. The only fix is to omit the future import in
+that module, which `approval.py` and `tool_approval.py` do, with a comment saying why. Python 3.13
+evaluates `X | None` natively, so nothing is lost.
+
+Also note `WorkflowContext[T, Any]` is rejected outright: `Any` is not a valid output type
+parameter. Use a real type, or a union of real types.
+
+### 14.3 The checkpoint allowlist must cover every reachable type, including ones you did not write
+
+`CosmosCheckpointStorage` uses JSON plus pickle and restricts deserialisation to a built-in safe
+set plus `agent_framework` types. Anything of yours must be registered, and "anything" is broader
+than it first looks - this phase needed all five categories:
+
+| Category | Example |
+|---|---|
+| State models | `IncidentCase`, `PolicyDecision`, `ApprovalRecord` |
+| Models *nested* inside them | `Citation`, inside `KnowledgeResult` |
+| Messages that travel on edges | `IntakeRequest`, `Partial`, `NodeProgress` |
+| The suspension's payloads | `ApprovalRequest`, `ApprovalResponse` |
+| **Pydantic's own tzinfo** | `pydantic_core._pydantic_core:TzInfo`, carried by every aware `datetime` |
+
+The failure mode is the dangerous part. A missing type does not raise on **write**; it fails on
+**read**, and the checkpoint is silently skipped:
+
+```
+Failed to decode checkpoint document: Checkpoint deserialization blocked for type
+'atlas_agent.schemas:Citation'
+```
+
+So an eight-superstep run reported **two** checkpoints, neither of them the one holding the pending
+approval - and the run itself looked perfect. `TzInfo` is the nastiest, because it is not importable
+by name; `checkpoints.py` resolves it from a validated value.
+
+Two more details:
+
+- The allowlist string separator is a **colon**: `"my_app.models:MyState"`. A dotted path is
+  accepted without complaint and matches nothing.
+- `register_checkpoint_type()` is process-wide and applies to storages created before it is called,
+  while `CosmosCheckpointStorage(allowed_checkpoint_types=[...])` takes the *names*. We pass both.
+
+### 14.4 The framework binds a checkpoint to its graph, so node ids are load-bearing
+
+Rebuild the workflow with one node renamed and the restore is refused:
+
+```
+WorkflowCheckpointException: Workflow graph has changed since the checkpoint was created.
+Please rebuild the original workflow before resuming.
+```
+
+`Workflow.graph_signature_hash` is the identity, and `WorkflowCheckpoint.graph_signature_hash`
+records which graph wrote each one. This is a feature - it stops you resuming into a workflow that
+would do something different - but it means a node id derived from a case id or a uuid produces a
+workflow that can never resume anything, and the failure appears only in front of an audience.
+
+Hence `node_ids.py`, and
+`tests/test_checkpoints.py::test_the_graph_signature_is_stable_across_builds`. Confirmed in
+production data: every checkpoint written by the deployed orchestrator carries the same signature,
+`0f5d1a902114...`.
+
+### 14.5 Resume: one call, and do not restore into a live workflow
+
+`workflow.run(checkpoint_id=..., responses={request_id: answer}, stream=True)` restores and answers
+in a single call. Measured on the real graph: **0.1 s**, with **no agent node re-run** - the
+analysis is not repeated, which is the whole claim of the Episode 2 set piece.
+
+But restoring is only for a *new* workflow object. Deliver a response to an object that still holds
+the pending request and the framework warns:
+
+```
+received a checkpoint restore while 1 request_info event(s) are still pending from an unfinished
+request/response cycle; those pending requests will be overwritten by the checkpoint's state
+```
+
+So ATLAS has two paths, differing by exactly this:
+
+- **warm** - the case is parked on this replica's live stream: `run(responses=...)`, no
+  `checkpoint_id`.
+- **cold** - the process was killed, or the approval landed on another replica: build a fresh
+  workflow, `run(checkpoint_id=..., responses=...)`.
+
+### 14.6 A re-raised request does not surface in the run that raised it
+
+Calling `ctx.request_info` from inside a `@response_handler` - which is what ATLAS does when an
+approval is refused for being out of role - does **not** emit a `request_info` event in that run.
+That run's request/response cycle has already been consumed. The re-raised request lands in the
+**next checkpoint** and is re-emitted when that checkpoint is restored.
+
+Verified: after a refused approval the case has a *new* parked checkpoint at a higher iteration,
+and restoring it re-emits the original `ApprovalRequest` with its `required_roles` intact. So a
+wrong-role approval leaves the question askable rather than dropping it - but the assertion has to
+be on the checkpoint, not on the event stream.
+
+### 14.7 Tool-level approval is a different mechanism with a different lifetime
+
+`@tool(..., approval_mode="always_require")` makes the framework emit a `function_approval_request`
+content instead of running the function. Confirmed live: the tool body does not execute. Release it
+with `Content.from_function_approval_response(approved=..., id=request.id, function_call=...)` sent
+as a user `Message` on the **same session** - the original `function_call` goes back with the
+answer, so the framework matches it to the exact call, with those exact arguments.
+
+`ApprovalMode` is `Literal["always_require", "never_require"]`. `ToolApprovalMiddleware` is a
+separate thing again: standing approvals held in session state, needing an `AgentSession`.
+
+When each fits is the Episode 2 point, and the difference is where the pause *lives*: a workflow
+request-info pause is a Cosmos checkpoint and survives a deploy; a tool approval pause is session
+state and survives only as far as the session store does. ATLAS uses the workflow gate for the
+plan, and demonstrates tool approval for the single destructive call, because only the latter can
+show a human the **arguments** before they are used.
+
+### 14.8 A suspended workflow never produces an output, so state has to leave another way
+
+The runner only ever saw an `IncidentCase` on the final `IncidentReport`. A case parked on a human
+has no report by definition, so while suspended there was nothing to persist, and
+`GET /cases/{id}` answered from the stale `pending` document.
+
+Fix: the policy gate and the approval node each `yield_output(case)` alongside their `NodeProgress`,
+with the context typed `WorkflowContext[IncidentCase, NodeProgress | IncidentCase]`. A union as the
+workflow-output parameter is accepted, and it keeps the executors ignorant of storage.
+
+Ordering matters too: the pending-approval document is written **before** the `approval_required`
+event is published, or a console that reacts immediately queries an approvals list that does not
+contain the case yet.
+
+### 14.9 `EntitlementRepository` needed a `list_all`
+
+The gate names *who could* approve a plan, which needs the whole entitlement table, not one row.
+Added `list_all()` alongside `for_role()`. Reading the table per decision was rejected: reference
+data is loaded once at startup, because a gate that re-reads Cosmos on every decision is a gate
+that can time out.
+
+### 14.10 The change-freeze rule had to split in two (decided 2026-09-21)
+
+Phase 07 section 3 rule 1 says: block if any step is destructive and targets a service with
+`change_freeze=true`. The seed freezes `svc-identity`, `svc-ledger` and `svc-payments` - and the
+canonical incident is *caused by* a payments deploy, so every real plan remediates `svc-payments`
+destructively. Six stored canonical cases were checked: **all six were blocked**, and the case
+never reached `awaiting_approval`, which would have deleted the Episode 2 set piece entirely.
+
+That is a genuine collision between the seed and `ARCHITECTURE.md`'s canonical flow, which expects
+the canonical case to reach approval. Resolved by splitting the rule, with the presenter's
+agreement:
+
+- **frozen and NOT implicated in this incident** - blocked outright. A plan reaching for a frozen
+  service the incident has nothing to do with is the plan being wrong. The refusal path stays real.
+- **frozen and implicated** - break glass: allowed, but only a `director` signs it, and the reason
+  says so in as many words. This is how a change freeze actually works.
+
+`implicated` is computed by `policy.implicated_services()` from intake and the two analysis
+dimensions - never from the plan - so a plan cannot talk its way into break-glass by naming a
+service the incident never touched.
+
+### 14.11 Two workflow bugs found while closing Phase 07 (2026-09-30)
+
+**Gap-fill used a node with no handler.** The handoff mode's `_fill_gaps` finished a stalled mesh
+with a bare `AgentNode`. The framework refuses to build a workflow containing an executor that has
+no `@handler`, and the error (`Executor AgentNode has no handlers defined`) surfaced only when the
+mesh actually stalled - so the handoff check in `verify_phase06` failed intermittently. Fixed by
+using `ChainNode`, which has the handler.
+
+**Handoff mode bypassed the policy gate.** Graph and sequential modes route the plan through
+`PolicyGateExecutor` and `ApprovalExecutor`; the handoff mesh ended at the planner and produced a
+report directly. A plan drafted in handoff mode was therefore never authorised - the exact
+"never let the model decide whether it is allowed to act" failure CLAUDE.md section 1 forbids.
+Fixed with an approval tail: `graph.build_approval_tail()` is a fixed three-node chain (policy
+gate, approval, report) with its own stable workflow name `atlas-incident-approval`, so its
+checkpoints resume like any other. When the gate is on, every handoff case is fed through it. A
+case that ends with no plan passes through untouched rather than being parked on an empty plan.
+

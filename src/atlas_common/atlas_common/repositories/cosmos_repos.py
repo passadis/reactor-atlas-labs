@@ -131,6 +131,11 @@ class EntitlementRepository:
         )
         return to_model(Entitlement, rows[0]) if rows else None
 
+    async def list_all(self) -> list[Entitlement]:
+        """The whole table. The policy gate needs it to name who *could* approve a given plan."""
+        rows = await self._store.query("entitlements", "SELECT * FROM c")
+        return [to_model(Entitlement, row) for row in rows]
+
     async def person(self, user_id: str) -> Person | None:
         rows = await self._store.query(
             "people",

@@ -163,6 +163,32 @@ graph: ## Print the live workflow graph as Mermaid (MODE=graph|sequential_only|h
 verify-phase06: ## Verify the deployed workflow: typed state, concurrency, all three modes, Mermaid
 	bash scripts/verify_phase06.sh
 
+# ---------------------------------------------------------------- Phase 07 --
+.PHONY: checkpoints
+checkpoints: ## List workflow checkpoints (CASE=CASE-XXXX narrows to one case)
+	$(PY) -m scripts.inspect_checkpoints $(if $(CASE),--case $(CASE),)
+
+.PHONY: resume
+resume: ## Resume a parked case from its checkpoint (CASE=... [APPROVE=1])
+	$(PY) -m scripts.resume_case $(CASE) $(if $(APPROVE),--approve,)
+
+.PHONY: kill-orchestrator
+kill-orchestrator: ## Episode 2 set piece: scale the orchestrator to 0, then back to 2
+	bash scripts/kill_orchestrator.sh
+
+.PHONY: verify-phase07
+verify-phase07: ## Verify checkpoints, the policy gate, approval and kill/resume
+	bash scripts/verify_phase07.sh
+
+.PHONY: screenshots-ep2
+screenshots-ep2: ## Capture the Episode 2 fallback screenshots (graph and approval gate)
+	$(UV) run --group ui python -m scripts.capture_phase06
+	$(UV) run --group ui python -m scripts.capture_phase07
+
+.PHONY: verify-phase07-fast
+verify-phase07-fast: ## Same, skipping the several-minute orchestrator restart
+	ATLAS_SKIP_KILL=1 bash scripts/verify_phase07.sh
+
 # ---------------------------------------------------------------- Phase 12 --
 .PHONY: eval
 eval: ## Run the evaluation suite and write a scorecard (Phase 12)

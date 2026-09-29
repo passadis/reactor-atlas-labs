@@ -546,3 +546,125 @@ Both fixes are three lines of instructions. See `docs/API-NOTES.md` 13.7.
 specialist that had already finished, and its thinner second answer silently replaced a good one.
 The recorder now writes once per dimension and tells the model it refused. That is the whole
 agentic/deterministic split in one bug.
+
+---
+
+## Phase 07 - Checkpoints, the policy gate and approval (Episode 2, second half)
+
+The set piece: **kill the orchestrator while a case is waiting on a human, bring it back, and
+finish the case from where it stopped.** Measured three times in a row, cold: 15.7 s, 16.8 s,
+17.0 s to kill and recover; 1.6-1.9 s to resume and complete.
+
+### The claim of this half
+
+> The agents did the thinking. **Code** decided whether any of it is allowed to run, and the
+> decision is durable: it survives the process that made it.
+
+Two things carry that. The policy gate is pure code with no path to a model, and the approval
+suspension is a Cosmos checkpoint rather than something held in a replica's memory.
+
+### What to show
+
+**Beat 1 - the gate stops the case.** Run the canonical incident in `?scope=ep2`. It reaches
+`policy_gate` and stops at `approval`. The panel shows why, in the gate's own words:
+
+```
+- break glass: svc-payments is under change freeze but is implicated in this
+  incident; a director must approve
+- the plan is high risk
+- targets a Tier 1 or Tier 2 service: svc-checkout-api, svc-payments
+- blast radius 10 exceeds the 8 that role 'sre' may act on unsupervised
+- 7 of 7 steps are destructive (svc-checkout-api, svc-payments)
+```
+
+Point out that `RemediationPlan.requires_approval` - the planner's own opinion - is **ignored**.
+The gate reads the plan's steps against the catalogue and the entitlement table, and its answer
+wins. `src/atlas_orchestrator/policy.py` has no import that could reach a model, and a test
+asserts that.
+
+**Beat 2 - the change freeze, both halves.** `svc-payments` is frozen *and* is what broke, so the
+gate escalates to a break-glass approval by a director rather than refusing. A plan reaching for
+`svc-ledger` - frozen, and nothing to do with this incident - is refused outright. Same rule, two
+answers, and the difference is computed from intake and the analysis, never from the plan.
+
+**Beat 3 - what is durable.** `make checkpoints CASE=<id>` while the case is parked:
+
+```
+  iter  checkpoint    parent    graph         timestamp                   pending
+     7  0703e118-...  b54e3608  0f5d1a902114  2026-09-21T00:11:25         approval:CASE-... <- PARKED ON A HUMAN
+```
+
+One checkpoint per superstep, and the last one holds the pending approval. Every row shares one
+`graph` signature, which is why a different replica can pick the case up: the framework binds a
+checkpoint to the graph that wrote it and refuses a restore into any other.
+
+**Beat 4 - the kill.** `make kill-orchestrator`. Every replica is terminated; everything in memory
+is gone. About 16 seconds later it is back. Then approve:
+
+```
+make resume CASE=<id> APPROVE=1
+```
+
+The case completes in under two seconds, and **no agent runs again** - triage, knowledge, impact
+and the planner are all skipped, because their results were in the checkpoint. Say the number out
+loud: 1.6 seconds against the 35 seconds the analysis took.
+
+**Beat 5 - who may say yes.** Approving as the signed-in persona (a manager) is refused:
+`403 role 'manager' may not approve this plan; required: director`. The refusal is audited, and
+the case stays parked and askable - a wrong answer cannot advance a plan by accident.
+
+**Beat 6 - the other approval mechanism.** `execute_remediation` is declared
+`approval_mode="always_require"`, so the framework itself holds the call and shows the **arguments**
+before anything runs. Worth contrasting: the workflow gate pauses the *case* in a checkpoint and
+survives a deploy; tool approval pauses one *turn* in session state and shows exactly what is about
+to be executed. Different questions, different lifetimes.
+
+### Measured (deployed, eastus2, 2026-09-21)
+
+| Step | Time |
+|---|---|
+| Canonical incident to `awaiting_approval` | 30-49 s |
+| Checkpoints written | 8-10, one per superstep |
+| Kill and recover (`make kill-orchestrator`) | **15.7 / 16.8 / 17.0 s** over three consecutive runs |
+| Cold resume and complete | **1.6-1.9 s** |
+| Agents re-run on resume | none |
+| Approval refused for the wrong role | immediate, 403 |
+
+### Commands
+
+```bash
+make checkpoints                 # every checkpoint
+make checkpoints CASE=CASE-XXXX  # just this case, with the parked one marked
+make kill-orchestrator           # terminate every replica and wait for it to come back
+make resume CASE=CASE-XXXX APPROVE=1   # approve and finish from the checkpoint, as a director
+make verify-phase07              # 13 checks including the real kill, about 6 minutes
+make verify-phase07-fast         # 10 checks, skips the kill
+```
+
+### Fallbacks
+
+| If this fails live | Do this |
+|---|---|
+| The case does not park | The gate may have auto-approved or blocked it. Show the reasons - they say which. A blocked case is a good beat too. |
+| The restart takes longer than expected | It is timed at about 16 s but it is a control-plane call. Keep talking; `make checkpoints` still answers while the orchestrator is down, because it reads Cosmos directly. |
+| The resume fails | `make checkpoints CASE=...` to show the parked checkpoint still exists, then `make resume CASE=... APPROVE=1` again. The case is not lost; it is a document. |
+| Approval returns 403 | That is the demo, not a failure - the signed-in persona is a manager and this case needs a director. Use `make resume` as the operator. |
+
+### Three things worth saying out loud
+
+**A failed checkpoint does not fail the run.** The framework logs it and carries on, so a
+misconfigured store looks exactly like a working one until you try to resume - in front of an
+audience. That is why `/api/health` reports the checkpoint store's state and why the verification
+counts checkpoints instead of trusting a green run. See `docs/API-NOTES.md` 14.1.
+
+**Node ids are load-bearing, not cosmetic.** A checkpoint is bound to the graph that wrote it. A
+node id built from a case id or a uuid produces a workflow that can never resume anything, and the
+failure only shows up at the moment you depend on it. Hence `node_ids.py` and a test that hashes
+the graph twice.
+
+**The gate got two things wrong, and verification caught both.** It blocked cases raised by a
+manager, because managers are seeded `may_execute=False` - they authorise rather than act - so a
+manager-raised incident could never be remediated by anyone. And it restored the newest checkpoint
+holding *any* pending approval, which with more than one case in flight is somebody else's. Neither
+showed up in unit tests; both showed up the first time the real system ran end to end.
+

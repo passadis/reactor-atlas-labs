@@ -18,14 +18,18 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
-from agent_framework import Workflow
+from agent_framework import CheckpointStorage, Workflow
 from atlas_agent.factory import IncidentAgentRuntime
+from atlas_common.models import Entitlement, Service
+from atlas_common.repositories.cosmos_repos import EntitlementRepository, ServiceRepository
 from atlas_common.telemetry import continued_from, current_traceparent, span
 from pydantic import BaseModel
 
 from .agents import FRONT_DESK, IMPACT, KNOWLEDGE, PLANNER, TRIAGE, SpecialistFactory
+from .approval import ApprovalExecutor, ApprovalResponse
+from .checkpoints import build_storage
 from .executors import (
-    AgentNode,
+    ChainNode,
     IntakeRequest,
     NodeProgress,
     apply_merge_rules,
@@ -39,6 +43,7 @@ from .executors import (
 from .graph import (
     CaseRecorder,
     Mode,
+    build_approval_tail,
     build_handoff_workflow,
     build_workflow,
     normalise_mode,
@@ -53,6 +58,12 @@ from .models import (
     RemediationPlan,
     TriageResult,
 )
+from .node_ids import (
+    APPROVAL,
+    WORKFLOW_APPROVAL_TAIL,
+    WORKFLOW_GRAPH,
+    WORKFLOW_SEQUENTIAL,
+)
 from .store import CaseRepository
 
 log = logging.getLogger("atlas.orchestrator")
@@ -66,6 +77,10 @@ ORCHESTRATOR_INVOCATION_LIMITS: dict[str, Any] = {
 }
 EVENT_BUFFER = 400
 RUN_TIMEOUT_S = 420.0
+# How long a live SSE stream waits on a human before letting go. The case is NOT lost at this
+# point - it stays `awaiting_approval` in Cosmos with its checkpoint, and approving later resumes
+# it cold. This only bounds how long one browser connection is held open.
+APPROVAL_WAIT_S = 300.0
 
 # Fixed order, because the planner needs the other three. Used only to fill gaps the handoff mesh
 # left behind; the graph shapes get their order from the edges.
@@ -99,6 +114,11 @@ class Run:
         self.case: IncidentCase | None = None
         self.report: IncidentReport | None = None
         self.task: asyncio.Task[None] | None = None
+        # Set while the workflow is parked on a human. `answers` is how an approval arriving on
+        # this replica rejoins the live stream instead of starting a cold resume.
+        self.request_id: str | None = None
+        self.checkpoint_id: str | None = None
+        self.answers: asyncio.Queue[ApprovalResponse] = asyncio.Queue()
 
     def publish(self, event: CaseEvent) -> None:
         self.buffer.append(event)
@@ -134,14 +154,36 @@ class Run:
 class CaseRunner:
     """Owns the runtime, the per-mode workflows and the live runs."""
 
-    def __init__(self, runtime: IncidentAgentRuntime, default_mode: str = "graph") -> None:
+    def __init__(self, runtime: IncidentAgentRuntime, default_mode: str = "graph",
+                 *, checkpoints: bool = True) -> None:
         self.runtime = runtime
         runtime.client.function_invocation_configuration.update(ORCHESTRATOR_INVOCATION_LIMITS)
         self.factory = SpecialistFactory(runtime)
         self.default_mode: Mode = normalise_mode(default_mode)
         self.cases = CaseRepository(runtime.store)
+        self.checkpoints: CheckpointStorage | None = (
+            build_storage(runtime.settings) if checkpoints else None)
+        # The policy gate needs both tables. Loaded once at startup, not per case: they are
+        # reference data, and a gate that re-reads Cosmos per decision is a gate that can time out.
+        self.catalogue: dict[str, Service] = {}
+        self.entitlements: dict[str, Entitlement] = {}
         self._workflows: dict[Mode, Workflow] = {}
         self._runs: dict[str, Run] = {}
+
+    async def load_reference_data(self) -> str:
+        """Read the catalogue and entitlements. Until this runs, the gate is not wired in."""
+        services = await ServiceRepository(self.runtime.store).list_all()
+        entitlements = await EntitlementRepository(self.runtime.store).list_all()
+        self.catalogue = {s.service_id: s for s in services}
+        self.entitlements = {e.role: e for e in entitlements}
+        self._workflows.clear()  # rebuild with the gate attached
+        return (f"{len(self.catalogue)} services "
+                f"({sum(1 for s in self.catalogue.values() if s.change_freeze)} frozen), "
+                f"{len(self.entitlements)} entitlement roles")
+
+    @property
+    def gated(self) -> bool:
+        return bool(self.catalogue and self.entitlements)
 
     def _event(self, run: Run, kind: str, *, node: str | None = None,
                data: dict[str, Any] | None = None) -> CaseEvent:
@@ -152,10 +194,31 @@ class CaseRunner:
     # ----------------------------------------------------------------------- topology --
 
     def workflow(self, mode: Mode) -> Workflow:
-        """Built once per mode and reused: agents are stateless, the graph is not per-request."""
+        """Built once per mode and reused.
+
+        Reused rather than rebuilt because a checkpoint is bound to its graph: one workflow object
+        per mode, with ids from `node_ids.py`, keeps `graph_signature_hash` stable for the life of
+        the process and across restarts.
+        """
         if mode not in self._workflows:
-            self._workflows[mode] = build_workflow(self.factory, mode)
+            if mode == "handoff":
+                # Handoff's typed case comes out of a conversational mesh; the durable, gated
+                # part of its run is the approval tail. That is what a resume restores into.
+                self._workflows[mode] = build_approval_tail(
+                    catalogue=self.catalogue, entitlements=self.entitlements,
+                    checkpoint_storage=self.checkpoints)
+            else:
+                self._workflows[mode] = build_workflow(
+                    self.factory, mode,
+                    catalogue=self.catalogue or None, entitlements=self.entitlements or None,
+                    checkpoint_storage=self.checkpoints,
+                )
         return self._workflows[mode]
+
+    def workflow_name(self, mode: Mode) -> str:
+        if mode == "handoff":
+            return WORKFLOW_APPROVAL_TAIL
+        return WORKFLOW_SEQUENTIAL if mode == "sequential_only" else WORKFLOW_GRAPH
 
     def graph(self, mode: str | None = None) -> dict[str, Any]:
         resolved = normalise_mode(mode or self.default_mode)
@@ -177,8 +240,14 @@ class CaseRunner:
         )
 
     async def get(self, case_id: str) -> dict[str, Any] | None:
+        """The case as it stands. Memory only while the run is live, Cosmos otherwise.
+
+        A finished run's cached case goes stale the moment anything else moves the case on - an
+        operator running `scripts/resume_case.py`, or another replica answering the approval. The
+        cache is an optimisation for a run in flight, never the source of truth.
+        """
         run = self._runs.get(case_id)
-        if run is not None and run.case is not None:
+        if run is not None and run.case is not None and not run.done:
             doc: dict[str, Any] = {
                 "id": case_id, "case_id": case_id, "status": run.case.status,
                 "mode": run.case.mode, "state": run.case.model_dump(mode="json"),
@@ -245,23 +314,74 @@ class CaseRunner:
                     case_span.set_attribute("atlas.case.severity", run.report.severity)
                     case_span.set_attribute("atlas.case.needs_human", run.report.needs_human)
 
-    async def _run_graph(self, run: Run, request: IntakeRequest, mode: Mode) -> None:
-        workflow = self.workflow(mode)
-        async for event in workflow.run(request, stream=True):
+    async def _pump(self, run: Run, stream: Any) -> bool:
+        """Relay one workflow run into the case's event stream. True if it parked on a human."""
+        suspended = False
+        async for event in stream:
             payload = event.data
             if event.type == "intermediate" and isinstance(payload, NodeProgress):
                 run.publish(self._event(run, "node", node=payload.node,
                                         data=payload.model_dump(mode="json")))
+            elif event.type == "intermediate" and isinstance(payload, IncidentCase):
+                # The gate nodes hand the case out so it can be persisted mid-flight; a suspended
+                # workflow never produces a report, so this is the only place it comes from.
+                run.case = payload
+                run.publish(self._event(run, "state", node=event.executor_id,
+                                        data={"status": payload.status}))
             elif event.type == "output" and isinstance(payload, IncidentReport):
                 run.case, run.report = payload.case, payload
                 run.publish(self._event(run, "report", data=payload.model_dump(
                     mode="json", exclude={"case"})))
+            elif event.type == "request_info":
+                suspended = True
+                run.request_id = event.request_id
+                await self._persist_pending_approval(run)
+                run.publish(self._event(run, "approval_required", node=APPROVAL,
+                                        data=payload.model_dump(mode="json")))
             elif event.type in ("executor_invoked", "executor_completed"):
                 run.publish(self._event(run, event.type, node=event.executor_id))
             elif event.type == "status":
                 run.publish(self._event(run, "status", data={"state": str(event.state)}))
+        return suspended
+
+    async def _run_graph(self, run: Run, request: IntakeRequest, mode: Mode) -> None:
+        """Run to completion, or to the approval gate and then wait for a human on this stream.
+
+        The suspension ends the workflow run: `request_info` parks the case and the stream goes
+        idle. Rather than close the browser's stream there, the case waits here for an answer so
+        the demo is one continuous timeline. Nothing is lost if it gives up - the checkpoint is
+        already written, and approving later resumes the case cold (`resume_from_checkpoint`).
+        """
+        workflow = self.workflow(mode)
+        suspended = await self._pump(run, workflow.run(request, stream=True))
+        await self._await_human(run, workflow, suspended)
+
+    async def _await_human(self, run: Run, workflow: Workflow, suspended: bool) -> None:
+        """Hold the stream while the case waits on a human, then finish it. Every shape."""
+        while suspended:
+            if run.case is None:
+                run.case = await self._case_from_store(run.case_id)
+            try:
+                answer = await asyncio.wait_for(run.answers.get(), APPROVAL_WAIT_S)
+            except TimeoutError:
+                run.publish(self._event(run, "awaiting_approval", node=APPROVAL, data={
+                    "message": "still waiting on a human; the case is checkpointed and resumable",
+                    "waited_s": APPROVAL_WAIT_S}))
+                return
+            # No `checkpoint_id` here, deliberately. This workflow object is still holding the
+            # pending request, and restoring a checkpoint over it overwrites that cycle:
+            #   "received a checkpoint restore while 1 request_info event(s) are still pending
+            #    ... those pending requests will be overwritten by the checkpoint's state"
+            # Restoring belongs to the cold path, where the object is new.
+            run.publish(self._event(run, "resuming", node=APPROVAL, data={
+                "by": answer.by, "role": answer.role, "approved": answer.approved,
+                "path": "warm"}))
+            suspended = await self._pump(run, workflow.run(
+                responses={run.request_id: answer} if run.request_id else None, stream=True))
+
         if run.case is not None:
             await self.cases.save(run.case, run.report)
+            await self.cases.close_approval(run.case)
 
     async def _run_handoff(self, run: Run, request: IntakeRequest) -> None:
         """The handoff shape as a case run: the deterministic bookends, an agent-routed middle."""
@@ -291,10 +411,19 @@ class CaseRunner:
         run.publish(self._event(run, "node", node="aggregate", data=NodeProgress(
             node="aggregate", case_id=case.case_id, seconds=0.0, ok=True,
             detail=f"{len(case.decisions)} decisions").model_dump(mode="json")))
-        run.report = build_report(case)
-        run.publish(self._event(run, "report",
-                                data=run.report.model_dump(mode="json", exclude={"case"})))
-        await self.cases.save(case, run.report)
+
+        if not self.gated:
+            run.report = build_report(case)
+            run.publish(self._event(run, "report",
+                                    data=run.report.model_dump(mode="json", exclude={"case"})))
+            await self.cases.save(case, run.report)
+            return
+
+        # Same gate, same suspension, same cold resume as the graph. Building the report by hand
+        # here - as the Phase 06 handoff path did - skipped the policy gate entirely.
+        tail = self.workflow("handoff")
+        suspended = await self._pump(run, tail.run(case, stream=True))
+        await self._await_human(run, tail, suspended)
 
     async def _fill_gaps(self, run: Run, case: IncidentCase, recorded: list[str]) -> None:
         """Run any specialist the handoff mesh never got to, directly.
@@ -308,7 +437,10 @@ class CaseRunner:
         for name, dimension, model in SPECIALIST_ORDER:
             if name in recorded:
                 continue
-            node = AgentNode(id=name, agent=self.factory.build(name), output_model=model,
+            # ChainNode, not the AgentNode base: the framework refuses to construct an executor
+            # with no @handler, and this path only runs when the mesh missed a specialist - so the
+            # bug hid until a live run needed it (docs/API-NOTES.md 14.11).
+            node = ChainNode(id=name, agent=self.factory.build(name), output_model=model,
                              dimension=dimension)
             value, reason, detail, calls, seconds = await node.invoke(
                 prompt_for(dimension, case), usable(dimension, case))
@@ -348,6 +480,139 @@ class CaseRunner:
         for task in tasks:
             with contextlib.suppress(BaseException):
                 await task
+        # CosmosCheckpointStorage owns its Cosmos client when built from an endpoint, so it has to
+        # be closed or the process exits complaining about an unclosed session.
+        closer = getattr(self.checkpoints, "close", None)
+        if closer is not None:
+            with contextlib.suppress(Exception):
+                await closer()
+
+    # ---------------------------------------------------------------------- approvals --
+
+    async def _case_from_store(self, case_id: str) -> IncidentCase | None:
+        doc = await self.cases.get(case_id)
+        state = (doc or {}).get("state")
+        return IncidentCase.model_validate(state) if state else None
+
+    async def _persist_pending_approval(self, run: Run) -> None:
+        """Make a parked case fully durable: the case state, then the approval row.
+
+        Both are needed, and forgetting the first cost a verification cycle. With two replicas, the
+        case parks on replica A while the approval arrives at replica B - which has nothing in
+        memory and reads Cosmos. If only the approval row were written, B would find the original
+        `pending` document with no state, no policy decision, and would answer
+        "case X has no policy decision to answer" instead of validating the approver.
+
+        The workflow's checkpoint remains the source of truth for *resuming*; these two documents
+        are the source of truth for *what is being asked, and of whom*. Phase 10's Logic App reads
+        the same approval row.
+        """
+        if run.case is None:
+            return
+        await self.cases.save(run.case)
+        await self.cases.save_approval(run.case, request_id=run.request_id or "")
+
+    async def latest_checkpoint_id(self, mode: Mode, *,
+                                   request_id: str | None = None) -> str | None:
+        """The newest checkpoint for a mode, or the newest one holding a SPECIFIC pending request.
+
+        `request_id` is not optional in spirit. The store holds every checkpoint of every case, so
+        "the newest checkpoint with any pending request" is usually some *other* case's - which
+        surfaces as `ValueError: Response provided for unknown request ID` at the worst moment.
+        `pending_request_info_events` is keyed by request id, so the match is exact.
+        """
+        if self.checkpoints is None:
+            return None
+        checkpoints = await self.checkpoints.list_checkpoints(
+            workflow_name=self.workflow_name(mode))
+        if request_id is not None:
+            checkpoints = [c for c in checkpoints if request_id in c.pending_request_info_events]
+        if not checkpoints:
+            return None
+        newest = max(checkpoints, key=lambda c: (c.iteration_count, c.timestamp))
+        return str(newest.checkpoint_id)
+
+    async def answer(self, case_id: str, response: ApprovalResponse) -> dict[str, Any]:
+        """Approve or reject a case, whether or not this replica is the one running it.
+
+        Two paths, and the second is the Episode 2 set piece:
+
+        - **warm**: the case is parked on this replica's live stream, so the answer joins it and
+          the browser sees the run continue in the same timeline.
+        - **cold**: nobody is holding the case - the process was killed, or the approval arrived
+          on another replica. The workflow is rebuilt from `node_ids`, restored from the newest
+          checkpoint carrying the pending request, and completed here.
+        """
+        doc = await self.cases.get(case_id)
+        if doc is None:
+            raise KeyError(case_id)
+        mode = normalise_mode(str(doc.get("mode") or self.default_mode))
+
+        run = self._runs.get(case_id)
+        if run is not None and not run.done and run.request_id:
+            run.answers.put_nowait(response)
+            return {"case_id": case_id, "path": "warm", "streaming": True}
+
+        return await self.resume_from_checkpoint(case_id, mode, response=response)
+
+    async def resume_from_checkpoint(
+        self, case_id: str, mode: Mode | None = None, *,
+        response: ApprovalResponse | None = None, checkpoint_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Rebuild the workflow and finish a parked case. The cold half of kill/resume."""
+        doc = await self.cases.get(case_id)
+        if doc is None:
+            raise KeyError(case_id)
+        resolved = normalise_mode(mode or str(doc.get("mode") or self.default_mode))
+        request_id = ApprovalExecutor.request_id_for(case_id)
+        target = checkpoint_id or await self.latest_checkpoint_id(
+            resolved, request_id=request_id)
+        if target is None:
+            raise LookupError(f"no checkpoint holds a pending request for {case_id}")
+
+        run = self._runs.get(case_id) or Run(case_id)
+        self._runs[case_id] = run
+        run.done = False
+        run.checkpoint_id = target
+        run.request_id = run.request_id or ApprovalExecutor.request_id_for(case_id)
+        workflow = self.workflow(resolved)
+        started = time.perf_counter()
+        with span("atlas.resume", case_id=case_id, checkpoint_id=target):
+            responses = {run.request_id: response} if response is not None else None
+            suspended = await self._pump(
+                run, workflow.run(checkpoint_id=target, responses=responses, stream=True))
+        if run.case is not None:
+            await self.cases.save(run.case, run.report)
+            await self.cases.close_approval(run.case)
+        run.finish()
+        return {
+            "case_id": case_id, "path": "cold", "checkpoint_id": target,
+            "seconds": round(time.perf_counter() - started, 2),
+            "status": run.case.status if run.case else doc.get("status"),
+            "still_suspended": suspended,
+        }
+
+    async def sweep(self) -> list[dict[str, Any]]:
+        """On startup, finish any case whose approval landed while this service was down.
+
+        Without this, killing the orchestrator between the approval and the resume would leave the
+        case parked forever - which is exactly the window the Episode 2 demo opens on purpose.
+        """
+        answered = await self.cases.answered_while_away()
+        results: list[dict[str, Any]] = []
+        for doc in answered:
+            case_id = str(doc["case_id"])
+            answer = doc.get("answer") or {}
+            try:
+                outcome = await self.resume_from_checkpoint(
+                    case_id, response=ApprovalResponse.model_validate(answer))
+            except Exception as exc:
+                log.exception("sweep could not resume %s", case_id)
+                outcome = {"case_id": case_id, "error": f"{type(exc).__name__}: {exc}"[:200]}
+            results.append(outcome)
+        if results:
+            log.info("startup sweep resumed %d case(s): %s", len(results), results)
+        return results
 
     # ---------------------------------------------------------------------- follow-up --
 

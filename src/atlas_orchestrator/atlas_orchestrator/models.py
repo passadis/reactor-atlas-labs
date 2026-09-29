@@ -23,8 +23,31 @@ from pydantic import BaseModel, ConfigDict, Field
 
 Dimension = Literal["triage", "knowledge", "impact", "plan"]
 CaseStatus = Literal[
-    "intake", "analysing", "aggregated", "plan_ready", "awaiting_approval", "dispatched", "failed"
+    "intake", "analysing", "aggregated", "plan_ready", "awaiting_approval",
+    "approved", "rejected", "executing", "completed", "failed",
 ]
+
+# The state machine, written out. A status is not a label the code sets wherever it likes; it is a
+# node in this graph, and `IncidentCase.transition()` refuses any edge that is not here. The
+# Episode 2 kill/resume demo depends on `awaiting_approval` being a real, durable stop - so the
+# only ways out of it are approved, rejected or failed, and never straight to executing.
+ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
+    "intake": frozenset({"analysing", "failed"}),
+    "analysing": frozenset({"analysing", "aggregated", "plan_ready", "failed"}),
+    "aggregated": frozenset({"plan_ready", "failed"}),
+    "plan_ready": frozenset({"awaiting_approval", "approved", "rejected", "failed"}),
+    "awaiting_approval": frozenset({"approved", "rejected", "failed"}),
+    "approved": frozenset({"executing", "failed"}),
+    "executing": frozenset({"completed", "failed"}),
+    # Terminal. A rejected or completed case is history; a new plan is a new case.
+    "rejected": frozenset(),
+    "completed": frozenset(),
+    "failed": frozenset(),
+}
+
+
+class IllegalTransitionError(ValueError):
+    """A status change the state machine does not allow. Always a bug, never a user error."""
 
 
 def _now() -> datetime:
@@ -153,6 +176,54 @@ class RemediationPlan(BaseModel):
         )
 
 
+# ------------------------------------------------------ authorization state (Phase 07) --
+#
+# These two live here rather than in policy.py because `IncidentCase` has to hold them and
+# policy.py imports from this module. models.py is the leaf: typed state only, no rules.
+
+
+class PolicyDecision(BaseModel):
+    """What the gate decided, and every reason it decided it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    approval_required: bool = True
+    auto_approved: bool = False
+    blocked: bool = False
+    # Human-readable and ordered: the UI and the report print these verbatim.
+    reasons: list[str] = Field(default_factory=list)
+    required_approver_roles: list[str] = Field(default_factory=list)
+    expires_at: datetime | None = None
+    # The plan this decision is about. An approval for a different plan is not an approval.
+    plan_id: str = ""
+    evaluated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @property
+    def summary(self) -> str:
+        if self.blocked:
+            return "Blocked by policy"
+        if self.auto_approved:
+            return "Auto-approved by policy"
+        who = " or ".join(self.required_approver_roles) or "an approver"
+        return f"Approval required from {who}"
+
+
+class ApprovalRecord(BaseModel):
+    """The decision as stored on the case: who, when, on which plan, and whether it was honoured."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    approved: bool
+    by: str
+    role: str
+    comment: str
+    at: datetime
+    plan_id: str
+    accepted: bool = True
+    refusal_code: str = ""
+    refusal_reason: str = ""
+
+
 # ---------------------------------------------------------------------- workflow state --
 
 
@@ -162,6 +233,9 @@ class IncidentCase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     case_id: str
+    # Versioned from day one: a checkpoint restored into a newer shape must fail loudly rather
+    # than half-populate a case. Checked by `CaseRepository` and on checkpoint restore.
+    schema_version: Literal[1] = 1
     report: str
     status: CaseStatus = "intake"
     services: list[str] = Field(default_factory=list)
@@ -169,6 +243,10 @@ class IncidentCase(BaseModel):
     knowledge: KnowledgeResult | None = None
     impact: ImpactResult | None = None
     plan: RemediationPlan | None = None
+    # Set by the policy gate and the approval node (Phase 07). Typed as Any-free forward refs so
+    # models.py stays the leaf of the import graph: policy.py and approval.py both import from it.
+    policy: PolicyDecision | None = None
+    approval: ApprovalRecord | None = None
     degraded: list[Degraded] = Field(default_factory=list)
     decisions: list[Decision] = Field(default_factory=list)
     mode: str = "graph"
@@ -180,6 +258,21 @@ class IncidentCase(BaseModel):
     def decide(self, by: str, rule: str, detail: str) -> None:
         self.decisions.append(Decision(by=by, rule=rule, detail=detail))
         self.updated_at = _now()
+
+    def transition(self, to: CaseStatus, *, by: str, rule: str, detail: str) -> None:
+        """Move the case to a new status, recording why. Refuses an edge the machine forbids.
+
+        Every status change goes through here, so the decision log and the status can never
+        disagree about how the case got where it is.
+        """
+        if to != self.status and to not in ALLOWED_TRANSITIONS.get(self.status, frozenset()):
+            raise IllegalTransitionError(
+                f"{self.case_id}: {self.status} -> {to} is not an allowed transition "
+                f"(from {self.status}, allowed: "
+                f"{sorted(ALLOWED_TRANSITIONS.get(self.status, frozenset())) or 'none, terminal'})"
+            )
+        self.status = to
+        self.decide(by, rule, detail)
 
     def degrade(self, dimension: Dimension, reason: str, detail: str) -> None:
         self.degraded.append(Degraded(dimension=dimension, reason=reason, detail=detail))  # type: ignore[arg-type]

@@ -70,12 +70,27 @@ def stream_case(web: httpx.Client, message: str, mode: str) -> dict[str, Any]:
                     run["nodes"][payload["node"]] = payload["data"]
                 elif event == "report":
                     run["report"] = payload["data"]
+                elif event == "approval_required":
+                    # Since Phase 07 the analysis of a gated case ends HERE: the plan exists and
+                    # the case is parked on a human. That is Phase 06's success condition; the
+                    # approval and what follows are verify_phase07's business.
+                    data = payload["data"]
+                    run["report"] = {"severity": _severity(web, case_id),
+                                     "plan_id": data.get("plan_id"),
+                                     "plan_steps": len(data.get("plan_summary") or []),
+                                     "parked": True}
+                    break
                 elif event == "error":
                     run["errors"].append(payload)
                 elif event == "end":
                     break
     run["elapsed_s"] = round(time.perf_counter() - started, 1)
     return run
+
+
+def _severity(web: httpx.Client, case_id: str) -> str | None:
+    state = (web.get(f"/api/workflow/{case_id}").json().get("state") or {})
+    return (state.get("triage") or {}).get("severity")
 
 
 # ------------------------------------------------------------ 1 deployed and running --
@@ -109,7 +124,7 @@ def canonical_case() -> None:
         run = stream_case(web, CANONICAL, "graph")
         state["graph_run"] = run
         report = run["report"] or {}
-        check("2 the canonical incident reaches plan_ready inside the budget",
+        check("2 the canonical incident reaches a plan inside the budget",
               bool(report) and report.get("plan_steps", 0) > 0
               and run["elapsed_s"] < PLAN_READY_BUDGET_S,
               f"{run['elapsed_s']}s, {report.get('severity')}, "

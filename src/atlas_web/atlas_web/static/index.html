@@ -99,6 +99,21 @@
           <dt>Plan</dt><dd id="wf-plan">-</dd>
           <dt>Elapsed</dt><dd id="wf-elapsed">-</dd>
         </dl>
+        <div id="wf-approval" class="wf-approval" hidden>
+          <h4>Approval required <span class="muted" id="wf-approval-roles"></span></h4>
+          <ul id="wf-approval-reasons" class="wf-reasons"></ul>
+          <div class="wf-plan" id="wf-approval-plan"></div>
+          <label class="ctl">Comment
+            <input type="text" id="wf-comment" maxlength="200"
+                   placeholder="Why you are approving or rejecting (required)">
+          </label>
+          <div class="wf-approval-actions">
+            <button type="button" id="wf-approve">Approve</button>
+            <button type="button" id="wf-reject" class="ghost">Reject</button>
+          </div>
+          <p class="muted" id="wf-approval-note"></p>
+        </div>
+
         <h4>Decision log <span class="muted">(deterministic code only)</span></h4>
         <ol id="wf-decisions" class="wf-decisions"></ol>
         <details class="wf-mermaid">

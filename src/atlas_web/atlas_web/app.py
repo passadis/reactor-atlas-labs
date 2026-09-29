@@ -12,6 +12,9 @@ Routes (Phase 04 contract):
     GET  /api/workflow/{id}/stream  SSE: node, executor_*, report, error, end (Phase 06)
     GET  /api/workflow/{id}         typed workflow state + decision log       (Phase 06)
     GET  /api/workflow/graph        workflow topology as JSON and Mermaid     (Phase 06)
+    GET  /api/workflow/approvals    cases parked on a human                   (Phase 07)
+    POST /api/workflow/{id}/decision approve or reject, as the signed-in user (Phase 07)
+    GET  /api/workflow/{id}/checkpoints  what is durable for this case        (Phase 07)
     POST /api/workflow/{id}/ask     handoff follow-up turn                    (Phase 06)
     GET  /api/approvals             plans awaiting approval
     POST /api/approvals/{case_id}   approve / reject - Entra role AND entitlement, server side
@@ -220,6 +223,13 @@ class WorkflowRequest(BaseModel):
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=3, max_length=1000)
+
+
+class WorkflowDecision(BaseModel):
+    """Approve or reject a parked case. Who is deciding comes from the token, not from here."""
+
+    decision: Literal["approve", "reject"]
+    comment: str = Field(min_length=3, max_length=1000)
 
 
 class ApprovalRequest(BaseModel):
@@ -438,6 +448,19 @@ def _routes(app: FastAPI) -> None:
 
         return EventSourceResponse(events())
 
+    # Declared before /api/workflow/{case_id}: FastAPI matches in declaration
+    # order, so a parameterised route above this one would swallow "approvals"
+    # and answer "No case approvals." - which it did.
+    @app.get("/api/workflow/approvals")
+    async def workflow_approvals(request: Request, _: ActorDep) -> dict[str, Any]:
+        orchestrator_url()
+        try:
+            response = await atlas(request).orchestrator.get("/approvals")
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise HTTPException(503, "I could not reach the workflow orchestrator.") from exc
+        return dict(response.json())
+
     @app.get("/api/workflow/graph")
     async def workflow_graph(request: Request, _: ActorDep,
                              mode: str | None = None) -> dict[str, Any]:
@@ -476,6 +499,70 @@ def _routes(app: FastAPI) -> None:
             )
             if response.status_code == 404:
                 raise HTTPException(404, f"No case {case_id}.")
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise HTTPException(503, "I could not reach the workflow orchestrator.") from exc
+        return dict(response.json())
+
+    # -- workflow approvals (Episode 2) --------------------------------------------------------
+    #
+    # The orchestrator checks the approval again on its side; this layer exists to bind the
+    # decision to a signed-in human. `can_approve` is the same check the Phase 04 console uses,
+    # so the two approval paths cannot drift apart.
+
+    @app.post("/api/workflow/{case_id}/decision")
+    async def workflow_decision(case_id: str, body: WorkflowDecision, request: Request,
+                                actor: ActorDep) -> dict[str, Any]:
+        """Approve or reject a parked case, as the signed-in user.
+
+        The caller does not get to say who they are: `by` and `role` come from the token and the
+        resolved persona, never from the request body. That is what stops the Episode 4
+        unauthorized beat from being a matter of typing a different role.
+        """
+        orchestrator_url()
+        state = atlas(request)
+        try:
+            pending = (await state.orchestrator.get("/approvals")).json()
+        except httpx.HTTPError as exc:
+            raise HTTPException(503, "I could not reach the workflow orchestrator.") from exc
+        row = next((p for p in pending.get("pending", []) if p.get("case_id") == case_id), None)
+        if row is None:
+            raise HTTPException(404, f"No approval is pending for {case_id}.")
+
+        decision = can_approve(
+            actor.principal.app_roles, actor.entitlement,
+            risk=str(row.get("risk") or "high"),
+            tier=1 if row.get("required_roles") else 3,
+            blast_radius=int(row.get("blast_radius") or 0),
+        )
+        if not decision.allowed:
+            log.warning("approval refused for %s by %s: %s", case_id,
+                        actor.principal.email, decision.reason)
+            raise HTTPException(403, decision.reason)
+
+        path = "approve" if body.decision == "approve" else "reject"
+        try:
+            response = await state.orchestrator.post(
+                f"/cases/{case_id}/{path}",
+                json={"by": actor.principal.email, "role": actor.persona_role,
+                      "comment": body.comment},
+                headers={"traceparent": current_traceparent() or ""},
+                timeout=ORCHESTRATOR_TIMEOUT,
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(503, "I could not reach the workflow orchestrator.") from exc
+        if response.status_code >= 400:
+            raise HTTPException(response.status_code,
+                                response.json().get("detail", "The orchestrator refused."))
+        return dict(response.json())
+
+    @app.get("/api/workflow/{case_id}/checkpoints")
+    async def workflow_checkpoints(case_id: str, request: Request, _: ActorDep) -> dict[str, Any]:
+        """What is durable for this case. Projected on stage during Episode 2."""
+        orchestrator_url()
+        try:
+            response = await atlas(request).orchestrator.get(
+                "/checkpoints", params={"case_id": case_id})
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise HTTPException(503, "I could not reach the workflow orchestrator.") from exc
