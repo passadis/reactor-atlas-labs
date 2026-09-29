@@ -99,6 +99,7 @@ async def health(request: Request) -> dict[str, Any]:
             "checkpoints": getattr(request.app.state, "checkpoint_status", "unknown"),
             "reference_data": getattr(request.app.state, "reference_data", "not loaded"),
             "policy_gate": "on" if engine.gated else "off",
+            "tools_backend": engine.runtime.tools.backend,
             "swept_on_start": len(getattr(request.app.state, "swept", []) or [])}
 
 

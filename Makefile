@@ -204,6 +204,18 @@ trace-check: ## Assert one trace spans all six hops for CASE=<case_id> (Phase 11
 	$(call PENDING,Phase 11 - observability)
 
 # ---------------------------------------------------------------- Phase 14 --
+.PHONY: mcp-probe
+mcp-probe: ## List the deployed MCP server's tools, as an MCP client sees them
+	uv run python -m scripts.mcp_probe
+
+.PHONY: compare-backends
+compare-backends: ## Run the canonical case with the tools on Cosmos, then on the ops API
+	uv run python -m scripts.compare_tool_backends
+
+.PHONY: verify-phase08
+verify-phase08: ## Verify the ops API and MCP server: spec, auth, idempotency, tokens, the switch
+	bash scripts/verify_phase08.sh
+
 .PHONY: verify-all
 verify-all: ## Run every scripts/verify_phase*.sh plus smoke and security (Phase 14)
 	@set -e; for s in scripts/verify_phase*.sh; do 	  echo "=== $$s ==="; bash "$$s"; 	done

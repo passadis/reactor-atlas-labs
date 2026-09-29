@@ -1177,3 +1177,77 @@ gate, approval, report) with its own stable workflow name `atlas-incident-approv
 checkpoints resume like any other. When the gate is on, every handoff case is fed through it. A
 case that ends with no plan passes through untouched rather than being parked on an empty plan.
 
+## 15. Functions tools findings (Phase 08, 2026-09-30)
+
+### 15.1 Approval tokens are unguessable and stored, not signed (deviation)
+
+PHASE-08 section B describes a *signed* approval token. Signing needs a key, and CLAUDE.md section 1
+permits exactly one secret (the APIM subscription key). A token signed with a managed-identity
+key-vault key would need Key Vault crypto on every submit and a rotation story for no extra safety
+here, because the ops API has to look the token up anyway to make it single use.
+
+Chosen: 256 bits from `secrets.token_urlsafe(32)`, prefixed `atlas_apv_`, and only its SHA-256 is
+stored (`approvals` container, partition = case). `check` compares case, plan, spent and expiry
+explicitly - the case comparison is explicit even though the case is also the partition key, so an
+authorization decision never depends on storage layout. `consume` spends the token with an ETag
+conditional replace, so two concurrent submits cannot both win. Every refusal writes an
+`approval-refusal` record carrying the correlation id. Forging is as hard as guessing 256 random
+bits; a leaked database gives hashes, not tokens.
+
+### 15.2 `listServices` added to the pack's operation list
+
+The pack's OpenAPI list has no way to enumerate services, but the agent's `list_services` tool and
+the orchestrator's reference-data load both need one. Added as `GET /services`. Without it the
+HTTP-backed agent could not keep parity with the Cosmos-backed one.
+
+### 15.3 Entra v2 tokens carry the app GUID as `aud`
+
+`atlas-ops-api` issues v2 access tokens. A v2 token's `aud` is the application's **client id**, not
+the `api://atlas-ops-api` identifier URI. With only the URI in `allowedAudiences`, App Service
+authentication rejected every managed-identity call with a 401 that looked like an RBAC or policy
+problem. `compute-functions.bicep` lists both. Phase 09's `validate-jwt` must do the same.
+
+### 15.4 The MCP endpoint and its key
+
+Installed `azure-functions==2.3.0` with extension bundle `[4.*, 5.0.0)`: `@app.mcp_tool_trigger`
+exposes a Streamable HTTP server at `/runtime/webhooks/mcp` (the legacy SSE endpoint
+`/runtime/webhooks/mcp/sse` also exists; do not use it). It is protected by the `mcp_extension`
+**system key**, sent as `x-functions-key`. That key is not in source, `.env` or Bicep:
+`scripts/mcp_probe.py` reads it from the management plane at run time, and in Phase 09 APIM holds
+it as a Key Vault-backed named value so no client ever sees it. The MCP extension also keeps state
+in storage **queues**, so the function identity needs the two queue roles and
+`AzureWebJobsStorage__queueServiceUri`, or tool calls fail at runtime with no clear error.
+
+### 15.5 `inject_context` returns the carrier; it does not fill yours
+
+`atlas_common.telemetry.inject_context(headers)` was being called for its side effect and its
+return value discarded, so outbound ops-API calls carried no `traceparent`. It returns a new dict.
+`ops_client` now assigns it: `headers = inject_context()`.
+
+### 15.6 Cold start is a demo problem; `alwaysReady` is the fix
+
+Measured on the canonical incident with the agent tools on the ops API: **71 s cold** against
+**44 s warm** (direct Cosmos: 50.8 s). The 27 s is Flex Consumption cold start landing mid-run.
+Both function apps now keep one `http` instance always ready. That costs a small always-on charge;
+the architecture's rule "never cold-start during a demo" is worth it.
+
+### 15.7 `atlas_common` is vendored into each function package
+
+Flex Consumption builds from `requirements.txt` remotely and cannot resolve a uv workspace member.
+`scripts/vendor_atlas_common.sh` copies `src/atlas_common/atlas_common` into each function folder
+as an `azd` prepackage hook; the copies are git-ignored. One source of truth, no divergence.
+
+### 15.8 The switch
+
+`Settings.ops_api_url` (`ATLAS_OPS_API_URL`) is the only thing that changes. Empty: the agent tools
+use the Cosmos repositories. Set: they use `repositories/http_repos.py`, which mirror the Cosmos
+repositories' signatures and raise the same `RepositoryUnavailableError`, so the tools, the prompts
+and the degraded-mode messages are identical. Bicep sets it on the web app and the orchestrator
+from the ops API's output; Phase 09 repoints that one value at the APIM gateway.
+
+`scripts/compare_tool_backends.py` runs the canonical incident both ways. Severity, suspected
+change, blast radius, Tier 1 exposure and the gate decision matched; approver roles and plan length
+are model output and are not compared.
+
+The hosted agent (Phase 05) still reads Cosmos: it is deployed through `agents/azure.yaml`, and
+routing it through the gateway is Phase 09 work, not a second switch here.

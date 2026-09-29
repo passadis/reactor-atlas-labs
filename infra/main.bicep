@@ -91,6 +91,9 @@ param workerImage string = ''
 @description('atlas-web app registration client id (scripts/create_app_registrations.sh). Enables built-in auth on the web app.')
 param webAppClientId string = ''
 
+@description('Client id of the atlas-ops-api registration (Phase 08 platform auth).')
+param opsApiClientId string = ''
+
 // ---------------------------------------------------------------------------- variables --
 
 // 8 lowercase chars, deterministic per (subscription, env, location). Every name derives from it.
@@ -227,6 +230,9 @@ module computeAca './modules/compute-aca.bicep' = {
     azdEnvironmentName: environmentName
     foundryAccountName: foundry.outputs.accountName
     appInsightsId: observability.outputs.appInsightsId
+    // Phase 08: the agent tools read operational data through the ops API, not Cosmos. Phase 09
+    // repoints this one value at the APIM gateway.
+    opsApiUrl: '${computeFunctions.outputs.apiAppUrl}/api'
     webAppClientId: webAppClientId
     webImage: webImage
     orchestratorImage: orchestratorImage
@@ -255,6 +261,11 @@ module computeFunctions './modules/compute-functions.bicep' = {
     searchEndpoint: data.outputs.searchServiceEndpoint
     serviceBusFqdn: messaging.outputs.namespaceFqdn
     commandsQueueName: messaging.outputs.commandsQueueName
+    // Phase 08: the MCP server's knowledge tool embeds its query through the Foundry account.
+    foundryProjectEndpoint: foundry.outputs.projectEndpoint
+    foundryAccountName: foundry.outputs.accountName
+    embedDeploymentName: foundry.outputs.embedDeploymentName
+    opsApiClientId: opsApiClientId
   }
 }
 

@@ -29,6 +29,7 @@ from agent_framework.exceptions import (
 from agent_framework.foundry import FoundryChatClient
 from atlas_common.auth import get_async_credential
 from atlas_common.config import Settings
+from atlas_common.ops_client import OpsApiClient
 from atlas_common.repositories import CosmosStore, KnowledgeSearch
 from azure.core.credentials_async import AsyncTokenCredential
 from openai import APIStatusError
@@ -315,7 +316,12 @@ class IncidentAgentRuntime:
         self.store = CosmosStore(settings, self.credential)
         self.knowledge = KnowledgeSearch(settings, self.credential)
         self.client = build_model_client(settings, self.credential)
-        self.tools = AtlasTools(settings, self.store, self.knowledge)
+        # One value decides whether the tools read Cosmos directly or call the operations API
+        # (PHASE-08 section C). In Phase 09 that value becomes the APIM gateway.
+        self.ops: OpsApiClient | None = (
+            OpsApiClient(settings.ops_api_url, self.credential)
+            if settings.ops_api_url else None)
+        self.tools = AtlasTools(settings, self.store, self.knowledge, ops=self.ops)
         self.instructions = InstructionStore(
             self.store, default_version=settings.instructions_version
         )
@@ -334,6 +340,8 @@ class IncidentAgentRuntime:
         return agent, loaded
 
     async def close(self) -> None:
+        if self.ops is not None:
+            await self.ops.close()
         await self.knowledge.close()
         await self.store.close()
         if self._owns_credential:

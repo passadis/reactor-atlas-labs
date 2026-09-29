@@ -1,0 +1,4 @@
+atlas_common/
+.python_packages/
+local.settings.json
+__pycache__/

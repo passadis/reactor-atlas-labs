@@ -49,6 +49,15 @@ param searchEndpoint string
 param serviceBusFqdn string
 param commandsQueueName string
 
+// Phase 08. `atlas_common.config.Settings` requires these, and the MCP server's knowledge tool
+// embeds its search query through the Foundry account's OpenAI endpoint.
+param foundryProjectEndpoint string
+param foundryAccountName string
+param embedDeploymentName string
+
+@description('Client id of the atlas-ops-api app registration. Empty skips platform auth.')
+param opsApiClientId string = ''
+
 @description('Python version. 3.13 per CLAUDE.md section 7.2.')
 param pythonVersion string = '3.13'
 
@@ -77,6 +86,12 @@ var commonAppSettings = [
   { name: 'ATLAS_SERVICEBUS_FQDN', value: serviceBusFqdn }
   { name: 'ATLAS_COMMANDS_QUEUE', value: commandsQueueName }
   { name: 'OTEL_SERVICE_NAMESPACE', value: 'atlas' }
+  { name: 'FOUNDRY_PROJECT_ENDPOINT', value: foundryProjectEndpoint }
+  { name: 'ATLAS_FOUNDRY_ACCOUNT_NAME', value: foundryAccountName }
+  { name: 'ATLAS_MODEL_EMBED', value: embedDeploymentName }
+  // The operations clock. Relative windows ("the last 4 hours") are measured back from here, so
+  // the same question gives the same answer whether it is asked on stage or in rehearsal.
+  { name: 'ATLAS_OPS_NOW', value: '2026-09-01T14:20:00Z' }
 ]
 
 // One Flex plan hosts both apps. FC1 is the only Flex Consumption SKU.
@@ -122,6 +137,15 @@ resource apiApp 'Microsoft.Web/sites@2024-04-01' = {
       scaleAndConcurrency: {
         maximumInstanceCount: maximumInstanceCount
         instanceMemoryMB: instanceMemoryMB
+        // One instance kept warm. Measured 2026-09-30: the canonical case took 71 s with the tools
+        // on a cold ops API against 44 s warm - a 27 s cold start in the middle of a live demo.
+        // The architecture's own rule is "never cold-start during a demo"; this is its price.
+        alwaysReady: [
+          {
+            name: 'http'
+            instanceCount: 1
+          }
+        ]
       }
       runtime: {
         name: 'python'
@@ -164,6 +188,15 @@ resource mcpApp 'Microsoft.Web/sites@2024-04-01' = {
       scaleAndConcurrency: {
         maximumInstanceCount: maximumInstanceCount
         instanceMemoryMB: instanceMemoryMB
+        // One instance kept warm. Measured 2026-09-30: the canonical case took 71 s with the tools
+        // on a cold ops API against 44 s warm - a 27 s cold start in the middle of a live demo.
+        // The architecture's own rule is "never cold-start during a demo"; this is its price.
+        alwaysReady: [
+          {
+            name: 'http'
+            instanceCount: 1
+          }
+        ]
       }
       runtime: {
         name: 'python'
@@ -179,7 +212,56 @@ resource mcpApp 'Microsoft.Web/sites@2024-04-01' = {
         // Processor on top of the blob roles. Both are in rbac.bicep - miss them and tool calls
         // fail at runtime with no obvious cause.
         { name: 'ATLAS_MCP_SERVER_NAME', value: 'atlas-ops-mcp' }
+        // The write tools call the operations API, so idempotency, the approval-token check and
+        // the audit trail live in one place. Phase 09 repoints this at the APIM gateway; it is the
+        // only value that changes (PHASE-08 section C).
+        { name: 'ATLAS_OPS_API_URL', value: 'https://${apiApp.properties.defaultHostName}/api' }
+        // The MCP extension needs queue storage too; identity-based, like AzureWebJobsStorage.
+        { name: 'AzureWebJobsStorage__queueServiceUri', value: replace(storageBlobEndpoint, '.blob.', '.queue.') }
       ])
+    }
+  }
+}
+
+// Platform-level Entra authentication on the ops API (Phase 08). Every request is rejected with
+// 401 before any code runs unless it carries a token for this API. The functions themselves are
+// `AuthLevel.ANONYMOUS`: authentication is the platform's job, not a function key's.
+//
+// Two audiences, because this registration issues v2 tokens: a v2 access token's `aud` is the
+// application's client id (a GUID), not the `api://atlas-ops-api` identifier URI. Accepting only
+// the URI rejects every managed-identity call with a 401 that looks like a policy bug.
+resource apiAuth 'Microsoft.Web/sites/config@2024-04-01' = if (!empty(opsApiClientId)) {
+  parent: apiApp
+  name: 'authsettingsV2'
+  properties: {
+    platform: {
+      enabled: true
+    }
+    globalValidation: {
+      requireAuthentication: true
+      unauthenticatedClientAction: 'Return401'
+      // Liveness stays open so probes and `azd` can tell a dead app from a locked one.
+      excludedPaths: ['/api/health']
+    }
+    identityProviders: {
+      azureActiveDirectory: {
+        enabled: true
+        registration: {
+          clientId: opsApiClientId
+          openIdIssuer: '${environment().authentication.loginEndpoint}${tenant().tenantId}/v2.0'
+        }
+        validation: {
+          allowedAudiences: [
+            'api://atlas-ops-api'
+            opsApiClientId
+          ]
+        }
+      }
+    }
+    login: {
+      tokenStore: {
+        enabled: false
+      }
     }
   }
 }

@@ -208,6 +208,46 @@ if [ "$SHOW_ONLY" != "1" ] && [ -n "${WEB_APP_ID:-}" ]; then
   configure_web_signin "$WEB_APP_ID"
 fi
 
+# ------------------------------------------------------------- atlas-ops-api scope (Phase 08) --
+# The ops API is protected by App Service authentication at the platform level. Two kinds of
+# caller need a token for it:
+#   - managed identities (APIM from Phase 09, the orchestrator and web app until then), which use
+#     the app-only `.default` scope and need nothing here;
+#   - a signed-in operator running verification, whose Azure CLI needs a delegated scope. The CLI
+#     is pre-authorized for exactly one, so `az account get-access-token --scope
+#     api://atlas-ops-api/ops.call` works without an interactive consent prompt.
+SCOPE_OPS_CALL="3f9c2a1e-7b4d-4c8e-9a51-2d6e8f0b1c73"
+
+configure_ops_api() {
+  local appId="$1" objId graph
+  objId="$(az ad app show --id "$appId" --query id -o tsv 2>/dev/null)"
+  if [ -z "$objId" ]; then
+    say "  WARN: atlas-ops-api not found; skipping its scope"
+    return 0
+  fi
+  graph="https://graph.microsoft.com/v1.0/applications/${objId}"
+  az rest --method PATCH --url "$graph" --headers "Content-Type=application/json" --body "{
+    \"api\": {\"requestedAccessTokenVersion\": 2,
+             \"oauth2PermissionScopes\": [{\"id\": \"${SCOPE_OPS_CALL}\", \"value\": \"ops.call\",
+               \"type\": \"User\", \"isEnabled\": true,
+               \"adminConsentDisplayName\": \"Call the ATLAS operations API\",
+               \"adminConsentDescription\": \"Call the ATLAS operations API as the signed-in user\",
+               \"userConsentDisplayName\": \"Call the ATLAS operations API\",
+               \"userConsentDescription\": \"Call the ATLAS operations API as you\"}]}
+  }" >/dev/null 2>&1 && say "  ops-api: scope ops.call" \
+    || { say "  ERROR adding the ops.call scope"; return 1; }
+  sleep 3
+  az rest --method PATCH --url "$graph" --headers "Content-Type=application/json" --body "{
+    \"api\": {\"preAuthorizedApplications\": [{\"appId\": \"${AZURE_CLI_APP_ID}\",
+              \"delegatedPermissionIds\": [\"${SCOPE_OPS_CALL}\"]}]}
+  }" >/dev/null 2>&1 && say "  ops-api: Azure CLI pre-authorized for ops.call" \
+    || say "  WARN: could not pre-authorize the Azure CLI for ops.call"
+}
+
+if [ "$SHOW_ONLY" != "1" ] && [ -n "${OPSAPI_APP_ID:-}" ]; then
+  configure_ops_api "$OPSAPI_APP_ID"
+fi
+
 echo
 echo "RESULT"
 echo "  atlas-web      ${WEB_APP_ID:-?}"

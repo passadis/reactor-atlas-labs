@@ -56,11 +56,20 @@ services:
     project: ./functions/ops_api
     host: function
     language: py
+    hooks:
+      # atlas_common is a workspace package, not on PyPI: vendor it before the zip is built.
+      prepackage:
+        shell: sh
+        run: bash ../../scripts/vendor_atlas_common.sh functions/ops_api
 
   opsmcp:
     project: ./functions/ops_mcp
     host: function
     language: py
+    hooks:
+      prepackage:
+        shell: sh
+        run: bash ../../scripts/vendor_atlas_common.sh functions/ops_mcp
 
 hooks:
   postprovision:

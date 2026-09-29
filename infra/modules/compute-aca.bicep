@@ -87,6 +87,9 @@ var orchestratorAppName = '${abbrs.appContainerApp}-atlas-orch-${resourceToken}'
 var workerAppName = '${abbrs.appContainerApp}-atlas-worker-${resourceToken}'
 
 // Shared by all three. Per-app values are appended at the call site below.
+@description('Base URL of the operations API. Empty keeps the agent tools on direct Cosmos reads.')
+param opsApiUrl string = ''
+
 var commonEnv = [
   { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }
   { name: 'ATLAS_COSMOS_ENDPOINT', value: cosmosEndpoint }
@@ -99,6 +102,8 @@ var commonEnv = [
   { name: 'OTEL_SERVICE_NAMESPACE', value: 'atlas' }
   { name: 'ATLAS_FOUNDRY_ACCOUNT_NAME', value: foundryAccountName }
   { name: 'AZURE_ENV_NAME', value: azdEnvironmentName }
+  // THE switch (PHASE-08 section C): set, and the agent tools call the operations API over HTTP.
+  { name: 'ATLAS_OPS_API_URL', value: opsApiUrl }
 ]
 
 // ---------------------------------------------------------------------------- registry --

@@ -72,6 +72,10 @@ class Settings:
     # incident: "none" 13.7-15.9 s, default 19.7-20.9 s, identical triage quality and identical
     # injection handling (docs/API-NOTES.md 11). Empty string = model default.
     reasoning_effort: str = "none"
+    # THE switch (Phase 08 section C). Empty: the agent tools read Cosmos through the in-process
+    # repositories. Set: they call the operations API over HTTP. Phase 09 changes only its value,
+    # from the function app to the APIM gateway - nothing else in the code differs.
+    ops_api_url: str = ""
 
     @property
     def foundry_openai_base_url(self) -> str:
@@ -101,4 +105,5 @@ class Settings:
             ),
             instructions_version=os.environ.get("ATLAS_INSTRUCTIONS_VERSION", INSTRUCTIONS_VERSION),
             reasoning_effort=os.environ.get("ATLAS_REASONING_EFFORT", "none").strip(),
+            ops_api_url=os.environ.get("ATLAS_OPS_API_URL", "").strip(),
         )

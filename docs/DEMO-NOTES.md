@@ -668,3 +668,55 @@ manager-raised incident could never be remediated by anyone. And it restored the
 holding *any* pending approval, which with more than one case in flight is somebody else's. Neither
 showed up in unit tests; both showed up the first time the real system ran end to end.
 
+## Phase 08 - The operations API and the MCP tool server (Episode 3, first beat)
+
+### What was built
+
+Two Flex Consumption function apps. `func-atlas-api` is the governed business API: 11 operations,
+a hand-written OpenAPI spec at `apim/openapi/atlas-ops-api.yaml`, Entra authentication enforced by
+the platform, idempotent writes, and single-use approval tokens on remediation. `func-atlas-mcp`
+is an MCP server over Streamable HTTP with six tools (`search_ops_knowledge`,
+`get_service_topology`, `get_oncall`, `open_ticket`, `submit_remediation`,
+`get_remediation_status`); its write tools call the ops API, so idempotency, the token check and
+the audit trail live in one place.
+
+The live agents - web app and orchestrator - now read operational data through the ops API. The
+change was one configuration value, `ATLAS_OPS_API_URL`.
+
+### What to show
+
+1. The OpenAPI spec. Point at a `description`: it tells the model when to call the operation and,
+   just as important, when **not** to. These descriptions are prompt engineering, and a test fails
+   the build if one loses its negative guidance.
+2. `make mcp-probe` - the server's `tools/list`, as any MCP client would see it.
+3. Idempotency: the same ticket submitted twice with one key - `201` then `200` with
+   `Idempotency-Replayed: true` and the same ticket id.
+4. A forged approval token: `403 approval_invalid` with a correlation id, and the audit record it
+   left behind. The model cannot talk its way past this, because it is plain code.
+5. `/api/health` on the web app: the `ops_api` check says which backend the tools are on.
+
+### Commands
+
+```bash
+make verify-phase08                                   # all checks, about 2 minutes
+uv run python -m scripts.mcp_probe                    # MCP initialize + tools/list
+uv run python -m scripts.mcp_probe --call get_oncall '{"service_id": "svc-payments"}'
+uv run python -m scripts.compare_tool_backends        # the canonical case, Cosmos vs ops API
+```
+
+### Fallbacks
+
+| If this fails live | Do this |
+|---|---|
+| The ops API returns 401 to the agent | Role or audience propagation. The tools degrade to "I could not reach the operations API"; say so, and show the verification run that already passed. |
+| The first call is slow | Both apps keep one instance always ready; a cold start should not happen. If it does, it is about 27 s - keep talking. |
+| MCP `tools/list` fails | The system key is read at run time from Azure; re-run `az login`. Show the recorded `tools/list` output below. |
+
+### Worth saying out loud
+
+**Idempotency is not a nice-to-have when a model is the caller.** Agents retry. An agent that
+retries a ticket creation without an idempotency key opens two tickets; one that retries a
+remediation without one runs it twice.
+
+**The token is authorization, and authorization is code.** The model never sees why a token is
+valid, never mints one, and cannot argue with a 403.

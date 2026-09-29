@@ -1,0 +1,25 @@
+{
+  "version": "2.0",
+  "logging": {
+    "logLevel": {
+      "default": "Information",
+      "Host.Results": "Error",
+      "Function": "Information"
+    },
+    "applicationInsights": {
+      "samplingSettings": { "isEnabled": false }
+    }
+  },
+  "extensionBundle": {
+    "id": "Microsoft.Azure.Functions.ExtensionBundle",
+    "version": "[4.*, 5.0.0)"
+  },
+  "functionTimeout": "00:01:00",
+  "extensions": {
+    "mcp": {
+      "serverName": "atlas-ops-mcp",
+      "serverVersion": "1.0.0",
+      "instructions": "Contoso Cloud Operations tools for the ATLAS incident copilot. Read tools (search_ops_knowledge, get_service_topology, get_oncall) are safe to call freely. open_ticket is idempotent on the case id. submit_remediation changes production and requires an approval token issued by a human approval; never invent one."
+    }
+  }
+}

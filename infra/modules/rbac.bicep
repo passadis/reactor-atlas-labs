@@ -198,6 +198,8 @@ resource agentHostOpenAIUsers 'Microsoft.Authorization/roleAssignments@2022-04-0
   for p in [
     { name: 'web', id: webPrincipalId }
     { name: 'orchestrator', id: orchestratorPrincipalId }
+    // Phase 08: the MCP server's search_ops_knowledge tool embeds through the account too.
+    { name: 'func', id: funcPrincipalId }
   ]: {
     name: guid(foundryAccount.id, p.id, roles.cognitiveServicesOpenAIUser)
     scope: foundryAccount

@@ -29,6 +29,7 @@ from agent_framework import FunctionTool, tool
 from atlas_common.config import Settings
 from atlas_common.graph import blast_radius
 from atlas_common.models import BlastRadius, Change, DocType, Incident, Service
+from atlas_common.ops_client import OpsApiClient
 from atlas_common.repositories import (
     ChangeRepository,
     CosmosStore,
@@ -37,6 +38,12 @@ from atlas_common.repositories import (
     RepositoryUnavailableError,
     ServiceRepository,
     TelemetryRepository,
+)
+from atlas_common.repositories.http_repos import (
+    HttpChangeRepository,
+    HttpIncidentRepository,
+    HttpServiceRepository,
+    HttpTelemetryRepository,
 )
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -193,12 +200,27 @@ class AtlasTools:
         knowledge: KnowledgeSearch,
         *,
         timeout_s: float = TOOL_TIMEOUT_S,
+        ops: OpsApiClient | None = None,
     ) -> None:
         self._settings = settings
-        self._services = ServiceRepository(store)
-        self._incidents = IncidentRepository(store)
-        self._changes = ChangeRepository(store)
-        self._telemetry = TelemetryRepository(store)
+        # The Phase 08 switch. With an ops API client the tools read through the operations API
+        # over HTTP; without one, straight from Cosmos. Both expose the same repository methods,
+        # so nothing below this constructor knows or cares which it has.
+        self._services: Any
+        self._incidents: Any
+        self._changes: Any
+        self._telemetry: Any
+        if ops is not None:
+            self._services = HttpServiceRepository(ops)
+            self._incidents = HttpIncidentRepository(ops)
+            self._changes = HttpChangeRepository(ops)
+            self._telemetry = HttpTelemetryRepository(ops)
+        else:
+            self._services = ServiceRepository(store)
+            self._incidents = IncidentRepository(store)
+            self._changes = ChangeRepository(store)
+            self._telemetry = TelemetryRepository(store)
+        self.backend = "ops-api" if ops is not None else "cosmos"
         self._knowledge = knowledge
         self._timeout_s = timeout_s
         self._catalogue: list[Service] | None = None
@@ -426,7 +448,7 @@ class AtlasTools:
 
     # -- registration --------------------------------------------------------------------------
     @property
-    def services(self) -> ServiceRepository:
+    def services(self) -> Any:
         """The CMDB repository. `IntakeExecutor` resolves service ids against it, in plain code."""
         return self._services
 

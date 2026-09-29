@@ -706,11 +706,21 @@ def _routes(app: FastAPI) -> None:
             return (f"HTTP {response.status_code}, default mode "
                     f"{body.get('mode')}, modes {body.get('modes')}")
 
+        async def ops_api() -> str:
+            # Which door the agent tools use (PHASE-08 section C). Not required: the tools degrade
+            # to a typed "could not reach" answer rather than taking the web app down.
+            url = state.runtime.settings.ops_api_url
+            if not url:
+                return "not configured, tools read Cosmos directly"
+            response = await state.http.get(f"{url.rstrip('/')}/health")
+            return f"HTTP {response.status_code}, tools on {state.runtime.tools.backend}"
+
         await asyncio.gather(
             probe("cosmos", True, cosmos()),
             probe("search", True, search()),
             probe("foundry", True, foundry()),
             probe("orchestrator", False, orchestrator()),
+            probe("ops_api", False, ops_api()),
         )
         healthy = all(c["status"] == "ok" for c in checks.values() if c["required"])
         return JSONResponse(
