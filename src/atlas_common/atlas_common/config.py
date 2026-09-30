@@ -73,9 +73,16 @@ class Settings:
     # injection handling (docs/API-NOTES.md 11). Empty string = model default.
     reasoning_effort: str = "none"
     # THE switch (Phase 08 section C). Empty: the agent tools read Cosmos through the in-process
-    # repositories. Set: they call the operations API over HTTP. Phase 09 changes only its value,
-    # from the function app to the APIM gateway - nothing else in the code differs.
+    # repositories. Set: they call the operations API over HTTP - the APIM gateway since Phase 09.
     ops_api_url: str = ""
+    # Phase 09. Through the gateway the token audience is atlas-gateway (the Atlas.Agent role is
+    # checked there), and the subscription key is read from Key Vault by this URI. Direct to the
+    # function app (local runs) the audience is the ops API and there is no key.
+    ops_api_scope: str = "api://atlas-ops-api/.default"
+    apim_key_secret_uri: str = ""
+    # The APIM MCP server whose tools/list supplies the tool descriptions, so one description in
+    # APIM governs every agent surface. Empty: the in-code docstrings.
+    tool_catalog_url: str = ""
 
     @property
     def foundry_openai_base_url(self) -> str:
@@ -106,4 +113,8 @@ class Settings:
             instructions_version=os.environ.get("ATLAS_INSTRUCTIONS_VERSION", INSTRUCTIONS_VERSION),
             reasoning_effort=os.environ.get("ATLAS_REASONING_EFFORT", "none").strip(),
             ops_api_url=os.environ.get("ATLAS_OPS_API_URL", "").strip(),
+            ops_api_scope=os.environ.get("ATLAS_OPS_API_SCOPE", "").strip()
+            or "api://atlas-ops-api/.default",
+            apim_key_secret_uri=os.environ.get("ATLAS_APIM_KEY_SECRET_URI", "").strip(),
+            tool_catalog_url=os.environ.get("ATLAS_TOOL_CATALOG_URL", "").strip(),
         )

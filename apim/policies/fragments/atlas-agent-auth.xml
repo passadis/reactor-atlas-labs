@@ -1,0 +1,54 @@
+<!--
+  atlas-agent-auth: only an ATLAS agent identity may call a tool.
+
+  Two answers, deliberately different:
+    401  no token, a bad token, or a token for another audience  - "who are you?"
+    403  a valid token for this gateway that is not an agent     - "I know who you are; no."
+  validate-jwt alone can only return one status, so the role is checked separately. Governance
+  proof 3 is the 403: the signed-in operator has a real token and a real subscription key and is
+  still refused, because a person is not an agent.
+
+  Two audiences: atlas-gateway issues v2 tokens, whose `aud` is the app's client id, not the
+  api:// URI (docs/API-NOTES.md 15.3). Two issuers for the same reason.
+-->
+<fragment>
+  <validate-jwt header-name="Authorization" failed-validation-httpcode="401"
+      failed-validation-error-message="A valid Entra token for api://atlas-gateway is required."
+      require-scheme="Bearer" output-token-variable-name="atlas-jwt">
+    <openid-config url="https://login.microsoftonline.com/{{tenant-id}}/v2.0/.well-known/openid-configuration" />
+    <audiences>
+      <audience>api://atlas-gateway</audience>
+      <audience>{{gateway-app-id}}</audience>
+    </audiences>
+    <issuers>
+      <issuer>https://login.microsoftonline.com/{{tenant-id}}/v2.0</issuer>
+      <issuer>https://sts.windows.net/{{tenant-id}}/</issuer>
+    </issuers>
+  </validate-jwt>
+  <set-variable name="agent-id" value="@{
+      var jwt = (Jwt)context.Variables["atlas-jwt"];
+      return jwt.Claims.GetValueOrDefault("azp", jwt.Claims.GetValueOrDefault("appid", jwt.Claims.GetValueOrDefault("oid", "unknown")));
+  }" />
+  <choose>
+    <when condition="@(!((Jwt)context.Variables["atlas-jwt"]).Claims.GetValueOrDefault("roles", "").Split(',').Contains("Atlas.Agent"))">
+      <return-response>
+        <set-status code="403" reason="Forbidden" />
+        <set-header name="Content-Type" exists-action="override">
+          <value>application/json</value>
+        </set-header>
+        <set-header name="x-atlas-correlation-id" exists-action="override">
+          <value>@((string)context.Variables.GetValueOrDefault("correlation-id", ""))</value>
+        </set-header>
+        <set-body>@(new JObject(
+            new JProperty("code", "forbidden"),
+            new JProperty("message", "This identity is not an ATLAS agent. The Atlas.Agent role is required."),
+            new JProperty("correlation_id", (string)context.Variables.GetValueOrDefault("correlation-id", ""))
+        ).ToString())</set-body>
+      </return-response>
+    </when>
+  </choose>
+  <trace source="atlas-agent-auth" severity="information">
+    <message>@("agent " + (string)context.Variables["agent-id"])</message>
+    <metadata name="agent-id" value="@((string)context.Variables["agent-id"])" />
+  </trace>
+</fragment>

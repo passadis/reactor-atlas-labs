@@ -45,6 +45,7 @@ from atlas_common.repositories.http_repos import (
     HttpServiceRepository,
     HttpTelemetryRepository,
 )
+from atlas_common.tool_catalog import ToolCatalog
 from pydantic import BaseModel, ConfigDict, Field
 
 TOOL_TIMEOUT_S = 15.0
@@ -201,8 +202,11 @@ class AtlasTools:
         *,
         timeout_s: float = TOOL_TIMEOUT_S,
         ops: OpsApiClient | None = None,
+        catalog: ToolCatalog | None = None,
     ) -> None:
         self._settings = settings
+        # Phase 09: descriptions governed in APIM override the docstrings below, by tool name.
+        self.catalog = catalog
         # The Phase 08 switch. With an ops API client the tools read through the operations API
         # over HTTP; without one, straight from Cosmos. Both expose the same repository methods,
         # so nothing below this constructor knows or cares which it has.
@@ -474,14 +478,17 @@ class AtlasTools:
             specs = [(f, s) for f, s in specs if f.__name__ in set(names)]
         tools: list[FunctionTool] = []
         for func, schema in specs:
-            tools.append(
-                tool(
-                    func,
-                    name=func.__name__,
-                    description=inspect.cleandoc(func.__doc__ or ""),
-                    schema=schema,
-                )
+            made = tool(
+                func,
+                name=func.__name__,
+                description=inspect.cleandoc(func.__doc__ or ""),
+                schema=schema,
             )
+            if self.catalog is not None:
+                # The docstring stays as the fallback; the catalog's description wins, now and
+                # on every later refresh (atlas_common.tool_catalog).
+                self.catalog.track(made)
+            tools.append(made)
         return tools
 
 

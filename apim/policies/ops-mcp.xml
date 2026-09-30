@@ -1,0 +1,25 @@
+<!--
+  atlas-ops-mcp (/ops-mcp/mcp): the ops API exposed as MCP tools (REST-as-MCP).
+
+  The tool DESCRIPTIONS live here, in APIM (apim/mcp/atlas-ops-mcp-tools.json). Every tool call is
+  an operation of atlas-ops-api, so that API's whole policy stack - contract, identity swap,
+  retry - runs underneath. This scope adds only who may list and call the tools, and how often.
+  Never read context.Response.Body here: it buffers the response and breaks MCP streaming.
+-->
+<policies>
+  <inbound>
+    <base />
+    <include-fragment fragment-id="atlas-agent-auth" />
+    <rate-limit-by-key calls="120" renewal-period="60" retry-after-header-name="Retry-After"
+        counter-key="@((string)context.Variables["agent-id"])" />
+  </inbound>
+  <backend>
+    <forward-request />
+  </backend>
+  <outbound>
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>

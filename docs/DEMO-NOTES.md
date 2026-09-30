@@ -720,3 +720,107 @@ remediation without one runs it twice.
 
 **The token is authorization, and authorization is code.** The model never sees why a token is
 valid, never mints one, and cannot argue with a 403.
+
+## Phase 09 - API Management as the AI gateway (Episode 3)
+
+### What was built
+
+APIM StandardV2 now sits between every agent and every operational backend:
+
+| API | Path | What it is |
+|---|---|---|
+| `atlas-ops-api` | `/ops` | The ops API, imported from the hand-written spec. Identity + subscription key. |
+| `atlas-ops-mcp` | `/ops-mcp/mcp` | REST-as-MCP over `/ops`. Five tools; their descriptions live here. |
+| `atlas-tools-mcp` | `/tools-mcp/mcp` | Passthrough to the Functions MCP server (six tools). |
+| `atlas-models` | `/models` | Foundry OpenAI v1, with token limits and token metrics per case. |
+
+Policy layers on `/ops`, in the order Episode 3 peels them back: rate limit and quota (before
+authentication, so a flood of bad tokens is cut off too), agent auth (401 for no or bad token, 403
+for a valid token that is not an agent), contract validation from the spec, identity swap to APIM's
+own managed identity, retry (1 + 3 with backoff), response contract, typed error envelope. Every
+policy is a file in `apim/policies/`, deployed by `infra/modules/apim-gateway.bicep`.
+
+Both Function Apps accept only APIM's managed identity. The MCP server has no function key at all.
+The web app, orchestrator, hosted agent (version 5) and prompt agent (toolbox `atlas-tools` v2)
+all reach tools through the gateway. The one secret, the subscription key, lives in Key Vault and
+is read by URI at startup.
+
+### What to show
+
+1. `make prove-governance` - the eight proofs, top to bottom. It is built to be read off the
+   projector. Say out loud: proof 3 is YOU. A real identity, a real key, still 403, because a
+   person is not an agent.
+2. Peel back a layer: open `apim/policies/ops-api.xml` and walk the numbered comment.
+3. `make tool-description-change` - one description changed in APIM, four agent surfaces pick it
+   up within a minute, then it is restored.
+4. The token-metric chart (query below), split by `CaseId`.
+
+### Measured (deployed, eastus2, 2026-09-30)
+
+| Beat | Time |
+|---|---|
+| `make prove-governance`, all nine lines green | about 3 min (most of it waiting for Function logs to land) |
+| Proof 5: first 429 | call 129 of the burst, `Retry-After: 1` (counters are distributed; waves of 20) |
+| Proof 7: read-only model budget exhausted | call 4 |
+| Proof 8: outage to typed 503 | 17.7 s, 4 attempts (1 + 3 retries with backoff) |
+| One APIM tool description to all four surfaces | prompt agent 4.0 s, web 4.0 s, orchestrator 17.5 s, hosted agent 56.7 s (next request) |
+| Restoring it | the same, again (the script republishes the toolbox both times) |
+| An agent's valid call through the gateway | about 1.5 s cold, well under a second warm |
+| Canonical incident to `awaiting_approval`, tools through APIM | 63 s graph, 63 s sequential, 100 s handoff (was 38-52 s direct) |
+
+The description-change beat takes about a minute because the script **republishes the toolbox**
+after changing APIM: left alone, Foundry's toolbox cache has a sliding expiry and was seen to take
+from 68 s to over 7 minutes (API-NOTES 16.10). Say it out loud - it is a real property of the
+platform. It is still a control-plane write (one APIM tool resource, one toolbox version), so
+rehearse it; if anything stalls, show this table and the recorded output.
+
+### Commands
+
+```bash
+make prove-governance            # eight proofs, about 3 minutes with the log check
+make tool-description-change     # change one APIM tool description, watch four surfaces, restore
+make chaos-ops-api-on            # ops API returns 503 for 120 s (a data flag, never a stopped app)
+make chaos-ops-api-off
+make verify-phase09
+```
+
+Token metrics (App Insights, Logs):
+
+```kusto
+customMetrics
+| where timestamp > ago(1d) and name in ('Total Tokens', 'Prompt Tokens', 'Completion Tokens')
+| extend CaseId = tostring(customDimensions.CaseId), AgentName = tostring(customDimensions.AgentName)
+| summarize tokens = sum(valueSum) by bin(timestamp, 5m), name, AgentName
+| render timechart
+```
+
+### Fallbacks
+
+| If this fails live | Do this |
+|---|---|
+| A proof fails on stage | Show the recorded green run in this file and the policy XML for that layer. Proof 5's counter is distributed; if it lags, run it again after a minute. |
+| The toolbox shows no `atlas_tools___*` tools | APIM discovers passthrough tools through the backend entity (API-NOTES 16.9). Check `tools-mcp-backend` still has its managed identity. |
+| Everything 403s for an agent | A role added in Entra reaches a running workload only with its next token. `bash scripts/assign_gateway_roles.sh --check`, then restart the revision. |
+| The description change is slow | The in-process cache is 60 s. Keep talking; it is timed in the table below. |
+
+### Data caveat
+
+`atlas-tools-mcp` logs tool arguments and results (8 KB each way) to App Insights for the Episode 4
+traces. They can carry incident details and names from the synthetic directory. Fine for this
+synthetic demo; in production scrub or disable it. Global body logging stays at 0 bytes because it
+breaks MCP streaming (API-NOTES 16.7).
+
+### Worth saying out loud
+
+**Where the gateway is not on the path.** Model calls from the orchestrator stay direct (descoped,
+CLAUDE.md 7.12; `/models` is shown with a direct call), and knowledge search reads AI Search
+directly. Every operational backend is behind APIM. Say it rather than let the audience assume.
+
+**The gateway costs time, and that is the trade.** The canonical case went from 38-52 s to about
+63 s once every tool call crossed APIM: identity checks, contract validation and an identity swap
+on each of a dozen calls. That is what governance costs here; say the number rather than hide it.
+
+**Two findings the docs do not have yet.** The MCP endpoint map is a dictionary, not the array the
+docs show. And a passthrough MCP server must authenticate through a backend entity, because APIM's
+own tool discovery never runs your policy. Both cost a failed deployment; both are in
+`docs/API-NOTES.md` 16.

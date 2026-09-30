@@ -216,6 +216,26 @@ compare-backends: ## Run the canonical case with the tools on Cosmos, then on th
 verify-phase08: ## Verify the ops API and MCP server: spec, auth, idempotency, tokens, the switch
 	bash scripts/verify_phase08.sh
 
+.PHONY: prove-governance
+prove-governance: ## The eight gateway governance proofs, projector-readable (Episode 3)
+	uv run python -m scripts.prove_governance
+
+.PHONY: tool-description-change
+tool-description-change: ## Change one APIM tool description, watch four surfaces, restore
+	uv run python -m scripts.tool_description_change
+
+.PHONY: chaos-ops-api-on
+chaos-ops-api-on: ## Ops API returns 503 for 120 s (data flag, never a stopped app)
+	bash scripts/chaos/ops_api_down.sh on 120
+
+.PHONY: chaos-ops-api-off
+chaos-ops-api-off: ## Clear the ops API chaos flag
+	bash scripts/chaos/ops_api_down.sh off
+
+.PHONY: verify-phase09
+verify-phase09: ## Verify the AI gateway: APIs, governance, only-via-APIM, metrics, four surfaces
+	bash scripts/verify_phase09.sh
+
 .PHONY: verify-all
 verify-all: ## Run every scripts/verify_phase*.sh plus smoke and security (Phase 14)
 	@set -e; for s in scripts/verify_phase*.sh; do 	  echo "=== $$s ==="; bash "$$s"; 	done

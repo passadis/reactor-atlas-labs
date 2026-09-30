@@ -90,16 +90,29 @@ def runner(request: Request) -> CaseRunner:
     return request.app.state.runner  # type: ignore[no-any-return]
 
 
+def _catalog_view(engine: CaseRunner) -> dict[str, Any] | None:
+    catalog = engine.runtime.catalog
+    if catalog is None:
+        return None
+    return {"url": catalog.url, "digest": catalog.digest, "descriptions": catalog.descriptions,
+            "last_error": catalog.last_error}
+
+
 @app.get("/api/health")
 async def health(request: Request) -> dict[str, Any]:
     """Liveness plus what this replica is configured to do. The web app probes this."""
     engine = runner(request)
+    # Keeps an idle orchestrator's tool descriptions current. Bounded by the catalog's TTL, so
+    # frequent probes cost nothing; never raises.
+    await engine.runtime.refresh_tool_catalog()
     return {"status": "ok", "service": "atlas-orchestrator",
             "mode": engine.default_mode, "modes": list(MODES),
             "checkpoints": getattr(request.app.state, "checkpoint_status", "unknown"),
             "reference_data": getattr(request.app.state, "reference_data", "not loaded"),
             "policy_gate": "on" if engine.gated else "off",
             "tools_backend": engine.runtime.tools.backend,
+            # The live descriptions the specialists are using right now, from APIM (Phase 09).
+            "tool_catalog": _catalog_view(engine),
             "swept_on_start": len(getattr(request.app.state, "swept", []) or [])}
 
 

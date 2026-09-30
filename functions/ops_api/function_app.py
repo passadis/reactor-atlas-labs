@@ -76,6 +76,13 @@ def _settings() -> Any:
 
 _deps: LiveDeps | None = None
 
+# The chaos flag (CLAUDE.md 9.3): an application-level 503, driven by a Cosmos document.
+CHAOS = core.ChaosSwitch(lambda: deps().store)
+
+
+def guard(cid: str, work: Any) -> Any:
+    return core.guarded(cid, work, chaos=CHAOS)
+
 
 def deps() -> LiveDeps:
     global _deps
@@ -124,14 +131,14 @@ async def health(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="services", methods=["GET"])
 async def list_services(req: func.HttpRequest) -> func.HttpResponse:
     cid = core.correlation_id(req.headers)
-    return respond(await core.guarded(cid, lambda: core.list_services(deps(), cid)))
+    return respond(await guard(cid, lambda: core.list_services(deps(), cid)))
 
 
 @app.route(route="services/{service_id}", methods=["GET"])
 async def get_service(req: func.HttpRequest) -> func.HttpResponse:
     cid = core.correlation_id(req.headers)
     sid = req.route_params["service_id"]
-    return respond(await core.guarded(cid, lambda: core.get_service(deps(), sid, cid)))
+    return respond(await guard(cid, lambda: core.get_service(deps(), sid, cid)))
 
 
 @app.route(route="services/{service_id}/health", methods=["GET"])
@@ -141,7 +148,7 @@ async def get_service_health(req: func.HttpRequest) -> func.HttpResponse:
     window = int_param(req, "window_minutes", 60)
     if window is None:
         return respond(core.error(400, "invalid_request", "window_minutes must be an integer", cid))
-    return respond(await core.guarded(
+    return respond(await guard(
         cid, lambda: core.get_service_health(deps(), sid, window, cid)))
 
 
@@ -152,14 +159,14 @@ async def get_blast_radius(req: func.HttpRequest) -> func.HttpResponse:
     depth = int_param(req, "depth", 3)
     if depth is None:
         return respond(core.error(400, "invalid_request", "depth must be an integer", cid))
-    return respond(await core.guarded(cid, lambda: core.get_blast_radius(deps(), sid, depth, cid)))
+    return respond(await guard(cid, lambda: core.get_blast_radius(deps(), sid, depth, cid)))
 
 
 @app.route(route="incidents/{incident_id}", methods=["GET"])
 async def get_incident(req: func.HttpRequest) -> func.HttpResponse:
     cid = core.correlation_id(req.headers)
     iid = req.route_params["incident_id"]
-    return respond(await core.guarded(cid, lambda: core.get_incident(deps(), iid, cid)))
+    return respond(await guard(cid, lambda: core.get_incident(deps(), iid, cid)))
 
 
 @app.route(route="changes", methods=["GET"])
@@ -169,7 +176,7 @@ async def list_changes(req: func.HttpRequest) -> func.HttpResponse:
     if since is None:
         return respond(core.error(400, "invalid_request", "since_minutes must be an integer", cid))
     sid = req.params.get("service_id")
-    return respond(await core.guarded(cid, lambda: core.list_changes(deps(), sid, since, cid)))
+    return respond(await guard(cid, lambda: core.list_changes(deps(), sid, since, cid)))
 
 
 @app.route(route="tickets", methods=["POST"])
@@ -179,14 +186,14 @@ async def create_ticket(req: func.HttpRequest) -> func.HttpResponse:
     if not isinstance(body, dict):
         return respond(core.error(400, "invalid_request", "the body must be a JSON object", cid))
     key = req.headers.get("Idempotency-Key")
-    return respond(await core.guarded(cid, lambda: core.create_ticket(deps(), body, key, cid)))
+    return respond(await guard(cid, lambda: core.create_ticket(deps(), body, key, cid)))
 
 
 @app.route(route="tickets/{ticket_id}", methods=["GET"])
 async def get_ticket(req: func.HttpRequest) -> func.HttpResponse:
     cid = core.correlation_id(req.headers)
     tid = req.route_params["ticket_id"]
-    return respond(await core.guarded(cid, lambda: core.get_ticket(deps(), tid, cid)))
+    return respond(await guard(cid, lambda: core.get_ticket(deps(), tid, cid)))
 
 
 @app.route(route="remediation/commands", methods=["POST"])
@@ -197,7 +204,7 @@ async def submit_remediation(req: func.HttpRequest) -> func.HttpResponse:
         return respond(core.error(400, "invalid_request", "the body must be a JSON object", cid))
     key = req.headers.get("Idempotency-Key")
     who = caller(req)
-    return respond(await core.guarded(
+    return respond(await guard(
         cid, lambda: core.submit_remediation(deps(), body, key, cid, caller=who)))
 
 
@@ -205,4 +212,4 @@ async def submit_remediation(req: func.HttpRequest) -> func.HttpResponse:
 async def get_operation(req: func.HttpRequest) -> func.HttpResponse:
     cid = core.correlation_id(req.headers)
     oid = req.route_params["operation_id"]
-    return respond(await core.guarded(cid, lambda: core.get_operation(deps(), oid, cid)))
+    return respond(await guard(cid, lambda: core.get_operation(deps(), oid, cid)))

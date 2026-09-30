@@ -285,6 +285,9 @@ class CaseRunner:
         return run
 
     async def _drive(self, run: Run, request: IntakeRequest) -> None:
+        # The workflows (and their agents) are built once per shape and kept; this updates their
+        # tools' descriptions in place if APIM changed one (atlas_common.tool_catalog).
+        await self.runtime.refresh_tool_catalog()
         try:
             async with asyncio.timeout(RUN_TIMEOUT_S):
                 await self._execute(run, request)

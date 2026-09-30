@@ -1,14 +1,16 @@
 """The one client for the ATLAS operations API.
 
 Everything that talks to the ops API over HTTP goes through this class: the agent tools
-(`atlas_agent.tools` in HTTP mode), the MCP server, and the orchestrator. That is what makes the
-Phase 09 switch a single config value - `ATLAS_OPS_API_URL` moves from the function app to the APIM
-gateway, and nothing else changes.
+(`atlas_agent.tools` in HTTP mode), the MCP server, and the orchestrator. That is what made the
+Phase 09 move a matter of configuration - `ATLAS_OPS_API_URL` points at the APIM gateway.
 
 Behaviour, all of it deliberate:
 
-- **Identity, not keys.** A managed-identity token for `api://atlas-ops-api/.default`, from the
-  same credential everything else uses. No function key, no subscription key.
+- **Identity first.** A managed-identity token from the same credential everything else uses:
+  for `api://atlas-gateway/.default` through APIM (which checks the Atlas.Agent role), or
+  `api://atlas-ops-api/.default` direct in local runs.
+- **Plus the one permitted secret, through APIM only**: the subscription key, read from Key Vault
+  by URI on first use (`key_provider`) and sent as `Ocp-Apim-Subscription-Key`. Never in config.
 - **`traceparent` propagated** from the current span, so a tool call made by an agent shows up
   as a child of that agent's span, through APIM, into the function.
 - **Retries only where they are safe**: on 429 and 5xx, with jittered exponential backoff, capped.
@@ -27,6 +29,7 @@ import asyncio
 import logging
 import random
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -90,12 +93,16 @@ class OpsApiClient:
 
     def __init__(self, base_url: str, credential: Any | None = None, *,
                  timeout_s: float = 10.0, transport: httpx.AsyncBaseTransport | None = None,
-                 breaker: CircuitBreaker | None = None) -> None:
+                 breaker: CircuitBreaker | None = None, scope: str = OPS_API_SCOPE,
+                 key_provider: Callable[[], Awaitable[str]] | None = None) -> None:
         if not base_url:
             raise ValueError("ATLAS_OPS_API_URL is not set")
         self.base_url = base_url.rstrip("/")
+        self.scope = scope
         self._credential = credential
         self._token: tuple[str, float] | None = None
+        self._key_provider = key_provider
+        self._key: str | None = None
         self._http = httpx.AsyncClient(base_url=self.base_url, timeout=timeout_s,
                                        transport=transport)
         self.breaker = breaker or CircuitBreaker()
@@ -114,9 +121,26 @@ class OpsApiClient:
             return {}
         now = time.time()
         if self._token is None or self._token[1] - now < 120:
-            token = await self._credential.get_token(OPS_API_SCOPE)
+            token = await self._credential.get_token(self.scope)
             self._token = (token.token, float(token.expires_on))
         return {"Authorization": f"Bearer {self._token[0]}"}
+
+    async def _subscription(self) -> dict[str, str]:
+        if self._key_provider is None:
+            return {}
+        if self._key is None:
+            try:
+                self._key = await self._key_provider()
+            except Exception as exc:
+                # A Key Vault problem is an outage of this dependency, not a crash: the tools
+                # degrade to "could not reach" like any other unreachable backend.
+                reason = type(exc).__name__
+                raise OpsApiUnavailableError(
+                    f"the gateway subscription key could not be read: {reason}") from exc
+        return {"Ocp-Apim-Subscription-Key": self._key}
+
+    async def _auth_headers(self) -> dict[str, str]:
+        return {**await self._bearer(), **await self._subscription()}
 
     async def request(self, method: str, path: str, *, params: dict[str, Any] | None = None,
                       json: Any = None, idempotency_key: str | None = None) -> httpx.Response:
@@ -135,7 +159,7 @@ class OpsApiClient:
             try:
                 response = await self._http.request(
                     method, path, params=params, json=json,
-                    headers={**headers, **await self._bearer()})
+                    headers={**headers, **await self._auth_headers()})
             except (httpx.TransportError, TimeoutError) as exc:
                 last = exc
                 self.breaker.record_failure()
@@ -158,6 +182,23 @@ class OpsApiClient:
                 return response
             raise self._error(response)
         raise OpsApiUnavailableError(f"the operations API failed: {last}")
+
+    async def send_once(self, method: str, path: str, *, json: Any = None,
+                        content: str | None = None, timeout_s: float = 60.0,
+                        idempotency_key: str | None = None) -> httpx.Response:
+        """One raw request with this client's identity: no retries, no breaker, no raising.
+
+        For governance proofs only (the web app's /api/gateway/probe): the point is to see what the
+        GATEWAY does - its status, its retries, its envelope - with nothing on this side masking it.
+        """
+        headers = {**inject_context(), **await self._auth_headers()}
+        if content is not None:
+            headers["Content-Type"] = "application/json"
+        headers["Idempotency-Key"] = idempotency_key or f"probe-{random.getrandbits(48):012x}"
+        # Longer than the client default: the gateway's own retries (1 + 3, backing off 1-8 s)
+        # must be allowed to finish, or the proof times out before the gateway answers.
+        return await self._http.request(method, path, json=json, content=content, headers=headers,
+                                        timeout=timeout_s)
 
     @staticmethod
     def _backoff(attempt: int, response: httpx.Response | None = None) -> float:

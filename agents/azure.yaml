@@ -42,14 +42,19 @@ services:
         cpu: "1"
         memory: 2Gi
     # FOUNDRY_* and APPLICATIONINSIGHTS_CONNECTION_STRING are injected by the platform; never
-    # declared here (CLAUDE.md 7.4). The data endpoints are the same the web app uses: until
-    # Phase 09 the tools read Cosmos and Search directly under the agent's own identity.
+    # declared here (CLAUDE.md 7.4). Since Phase 09 the operational tools go through the APIM
+    # gateway as the agent's Entra identity (Atlas.Agent), with the subscription key read from
+    # Key Vault by URI; Cosmos stays for instructions and sessions, Search for knowledge.
     env:
       AZURE_AI_MODEL_DEPLOYMENT_NAME: ${AZURE_AI_MODEL_DEPLOYMENT_NAME}
       ATLAS_COSMOS_ENDPOINT: ${ATLAS_COSMOS_ENDPOINT}
       ATLAS_COSMOS_DATABASE: ${ATLAS_COSMOS_DATABASE}
       ATLAS_SEARCH_ENDPOINT: ${ATLAS_SEARCH_ENDPOINT}
       ATLAS_FOUNDRY_ACCOUNT_NAME: ${ATLAS_FOUNDRY_ACCOUNT_NAME}
+      ATLAS_OPS_API_URL: ${ATLAS_OPS_API_URL}
+      ATLAS_OPS_API_SCOPE: ${ATLAS_OPS_API_SCOPE}
+      ATLAS_APIM_KEY_SECRET_URI: ${ATLAS_APIM_KEY_SECRET_URI}
+      ATLAS_TOOL_CATALOG_URL: ${ATLAS_TOOL_CATALOG_URL}
       ATLAS_REASONING_EFFORT: none
     # Content-safety guardrail by full ARM id (a bare name fails open; API-NOTES 10.2). A `$ref`
     # rather than ${ATLAS_RAI_POLICY_ID}: this extension version passes ${...} inside `policies`

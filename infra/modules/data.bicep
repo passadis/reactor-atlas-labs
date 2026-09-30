@@ -107,6 +107,9 @@ var containers = [
   // Instruction versions, read per request so the v0/v1 switch is a data read, not a redeploy
   // (CLAUDE.md 9.1). Created now so Phase 03 needs no provision.
   { name: 'agent-instructions', partitionKey: '/agent', defaultTtl: -1 }
+  // Runtime switches the demo flips as DATA, never as config: the ops API chaos flag (CLAUDE.md
+  // 9.3 - an application-level 503, never a stopped Function App). One document per switch.
+  { name: 'control', partitionKey: '/id', defaultTtl: -1 }
 ]
 
 resource cosmosContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2026-03-15' = [

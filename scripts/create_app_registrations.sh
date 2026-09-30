@@ -218,34 +218,42 @@ fi
 #     api://atlas-ops-api/ops.call` works without an interactive consent prompt.
 SCOPE_OPS_CALL="3f9c2a1e-7b4d-4c8e-9a51-2d6e8f0b1c73"
 
-configure_ops_api() {
-  local appId="$1" objId graph
+# Phase 09 adds the same for atlas-gateway (`gateway.call`). The operator's delegated token for the
+# gateway carries NO Atlas.Agent role - that is governance proof 3 (a real identity, a real
+# subscription key, and still 403 because it is not an agent).
+SCOPE_GATEWAY_CALL="5d1e7f20-8a3c-4b6d-9e02-6c7a1f4b2d85"
+
+configure_delegated_scope() {
+  local appId="$1" scopeId="$2" value="$3" label="$4" objId graph
   objId="$(az ad app show --id "$appId" --query id -o tsv 2>/dev/null)"
   if [ -z "$objId" ]; then
-    say "  WARN: atlas-ops-api not found; skipping its scope"
+    say "  WARN: ${label} not found; skipping its scope"
     return 0
   fi
   graph="https://graph.microsoft.com/v1.0/applications/${objId}"
   az rest --method PATCH --url "$graph" --headers "Content-Type=application/json" --body "{
     \"api\": {\"requestedAccessTokenVersion\": 2,
-             \"oauth2PermissionScopes\": [{\"id\": \"${SCOPE_OPS_CALL}\", \"value\": \"ops.call\",
+             \"oauth2PermissionScopes\": [{\"id\": \"${scopeId}\", \"value\": \"${value}\",
                \"type\": \"User\", \"isEnabled\": true,
-               \"adminConsentDisplayName\": \"Call the ATLAS operations API\",
-               \"adminConsentDescription\": \"Call the ATLAS operations API as the signed-in user\",
-               \"userConsentDisplayName\": \"Call the ATLAS operations API\",
-               \"userConsentDescription\": \"Call the ATLAS operations API as you\"}]}
-  }" >/dev/null 2>&1 && say "  ops-api: scope ops.call" \
-    || { say "  ERROR adding the ops.call scope"; return 1; }
+               \"adminConsentDisplayName\": \"Call ${label}\",
+               \"adminConsentDescription\": \"Call ${label} as the signed-in user\",
+               \"userConsentDisplayName\": \"Call ${label}\",
+               \"userConsentDescription\": \"Call ${label} as you\"}]}
+  }" >/dev/null 2>&1 && say "  ${label}: scope ${value}" \
+    || { say "  ERROR adding the ${value} scope"; return 1; }
   sleep 3
   az rest --method PATCH --url "$graph" --headers "Content-Type=application/json" --body "{
     \"api\": {\"preAuthorizedApplications\": [{\"appId\": \"${AZURE_CLI_APP_ID}\",
-              \"delegatedPermissionIds\": [\"${SCOPE_OPS_CALL}\"]}]}
-  }" >/dev/null 2>&1 && say "  ops-api: Azure CLI pre-authorized for ops.call" \
-    || say "  WARN: could not pre-authorize the Azure CLI for ops.call"
+              \"delegatedPermissionIds\": [\"${scopeId}\"]}]}
+  }" >/dev/null 2>&1 && say "  ${label}: Azure CLI pre-authorized for ${value}" \
+    || say "  WARN: could not pre-authorize the Azure CLI for ${value}"
 }
 
 if [ "$SHOW_ONLY" != "1" ] && [ -n "${OPSAPI_APP_ID:-}" ]; then
-  configure_ops_api "$OPSAPI_APP_ID"
+  configure_delegated_scope "$OPSAPI_APP_ID" "$SCOPE_OPS_CALL" "ops.call" "atlas-ops-api"
+fi
+if [ "$SHOW_ONLY" != "1" ] && [ -n "${GATEWAY_APP_ID:-}" ]; then
+  configure_delegated_scope "$GATEWAY_APP_ID" "$SCOPE_GATEWAY_CALL" "gateway.call" "atlas-gateway"
 fi
 
 echo
@@ -263,8 +271,8 @@ if [ -n "${OPSAPI_APP_ID:-}" ];  then azd env set ATLAS_OPSAPI_APP_CLIENT_ID "$O
 echo
 echo "Written to the azd environment as ATLAS_*_APP_CLIENT_ID."
 echo
-echo "Still to do, in Phase 09, once the orchestrator identity exists:"
-echo "  - assign Atlas.Agent to the orchestrator UAMI and to the hosted agent identity"
+echo "Atlas.Agent is assigned to the workload identities by scripts/assign_gateway_roles.sh"
+echo "(postprovision), once those identities exist. Still manual:"
 echo "  - assign Atlas.Approver to the demo approver account"
 echo "  - do NOT assign Atlas.Approver to the readonly persona; the Episode 4"
 echo "    unauthorized eval category depends on that being false"

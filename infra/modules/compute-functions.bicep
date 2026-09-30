@@ -4,9 +4,9 @@
 // repo is 3.13) as the shared func user-assigned identity, with identity-based AzureWebJobsStorage.
 // No storage keys, which is why the application storage account has allowSharedKeyAccess false.
 //
-// Entra authentication is enforced at the platform level in Phase 08; APIM presents a
-// managed-identity token for the api://atlas-ops-api audience. Nothing here is anonymous by design,
-// it is anonymous only until Phase 08 lands.
+// Entra authentication is enforced at the platform level, locked to APIM's identity since Phase 09
+// (functions-auth.bicep): APIM presents a managed-identity token for api://atlas-ops-api and no
+// other caller gets in.
 
 @description('Region for the function apps.')
 param location string
@@ -55,8 +55,15 @@ param foundryProjectEndpoint string
 param foundryAccountName string
 param embedDeploymentName string
 
-@description('Client id of the atlas-ops-api app registration. Empty skips platform auth.')
-param opsApiClientId string = ''
+// Phase 09. The MCP server's write tools reach the ops API through the gateway like every other
+// caller: gateway URL plus the Key Vault URI of the subscription key, read at startup with the
+// function identity. Both are plain strings (the gateway URL is deterministic), so this module
+// does not depend on APIM - APIM depends on it.
+@description('APIM gateway base URL.')
+param gatewayUrl string
+
+@description('Key Vault secret URI of the agent APIM subscription key.')
+param apimKeySecretUri string
 
 @description('Python version. 3.13 per CLAUDE.md section 7.2.')
 param pythonVersion string = '3.13'
@@ -213,55 +220,17 @@ resource mcpApp 'Microsoft.Web/sites@2024-04-01' = {
         // fail at runtime with no obvious cause.
         { name: 'ATLAS_MCP_SERVER_NAME', value: 'atlas-ops-mcp' }
         // The write tools call the operations API, so idempotency, the approval-token check and
-        // the audit trail live in one place. Phase 09 repoints this at the APIM gateway; it is the
-        // only value that changes (PHASE-08 section C).
-        { name: 'ATLAS_OPS_API_URL', value: 'https://${apiApp.properties.defaultHostName}/api' }
+        // the audit trail live in one place - through the gateway since Phase 09, as an agent
+        // (Atlas.Agent) with the agents' subscription key.
+        { name: 'ATLAS_OPS_API_URL', value: '${gatewayUrl}/ops' }
+        { name: 'ATLAS_OPS_API_SCOPE', value: 'api://atlas-gateway/.default' }
+        { name: 'ATLAS_APIM_KEY_SECRET_URI', value: apimKeySecretUri }
+        // No function key on the MCP webhook: platform Entra auth, locked to APIM, replaces it
+        // (functions-auth.bicep). One less secret in the system.
+        { name: 'AzureFunctionsJobHost__extensions__mcp__system__webhookAuthorizationLevel', value: 'Anonymous' }
         // The MCP extension needs queue storage too; identity-based, like AzureWebJobsStorage.
         { name: 'AzureWebJobsStorage__queueServiceUri', value: replace(storageBlobEndpoint, '.blob.', '.queue.') }
       ])
-    }
-  }
-}
-
-// Platform-level Entra authentication on the ops API (Phase 08). Every request is rejected with
-// 401 before any code runs unless it carries a token for this API. The functions themselves are
-// `AuthLevel.ANONYMOUS`: authentication is the platform's job, not a function key's.
-//
-// Two audiences, because this registration issues v2 tokens: a v2 access token's `aud` is the
-// application's client id (a GUID), not the `api://atlas-ops-api` identifier URI. Accepting only
-// the URI rejects every managed-identity call with a 401 that looks like a policy bug.
-resource apiAuth 'Microsoft.Web/sites/config@2024-04-01' = if (!empty(opsApiClientId)) {
-  parent: apiApp
-  name: 'authsettingsV2'
-  properties: {
-    platform: {
-      enabled: true
-    }
-    globalValidation: {
-      requireAuthentication: true
-      unauthenticatedClientAction: 'Return401'
-      // Liveness stays open so probes and `azd` can tell a dead app from a locked one.
-      excludedPaths: ['/api/health']
-    }
-    identityProviders: {
-      azureActiveDirectory: {
-        enabled: true
-        registration: {
-          clientId: opsApiClientId
-          openIdIssuer: '${environment().authentication.loginEndpoint}${tenant().tenantId}/v2.0'
-        }
-        validation: {
-          allowedAudiences: [
-            'api://atlas-ops-api'
-            opsApiClientId
-          ]
-        }
-      }
-    }
-    login: {
-      tokenStore: {
-        enabled: false
-      }
     }
   }
 }

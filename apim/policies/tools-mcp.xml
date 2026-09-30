@@ -1,0 +1,34 @@
+<!--
+  atlas-tools-mcp (/tools-mcp/mcp): passthrough to the Functions MCP server, governed.
+
+  The agent's token is checked here. The call onward to the MCP Function App is made as APIM's
+  own managed identity by the backend entity (tools-mcp-backend, credentials.managedIdentity) - the
+  only caller the Function App accepts, so no function key exists and no client can reach the
+  server around the gateway. It is on the backend, not in this policy, because APIM's own tool
+  discovery never runs this policy (docs/API-NOTES.md 16.9).
+  Payload logging is on for this server only (Episode 4 traces show tool arguments and results) -
+  see the data caveat in docs/DEMO-NOTES.md.
+  Never read context.Response.Body here.
+-->
+<policies>
+  <inbound>
+    <base />
+    <include-fragment fragment-id="atlas-agent-auth" />
+    <rate-limit-by-key calls="120" renewal-period="60" retry-after-header-name="Retry-After"
+        counter-key="@((string)context.Variables["agent-id"])" />
+    <!-- The agent's own token must not travel on: the backend entity authenticates as APIM. -->
+    <set-header name="Authorization" exists-action="delete" />
+    <set-header name="x-atlas-agent" exists-action="override">
+      <value>@((string)context.Variables["agent-id"])</value>
+    </set-header>
+  </inbound>
+  <backend>
+    <forward-request />
+  </backend>
+  <outbound>
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>

@@ -94,12 +94,20 @@ param webAppClientId string = ''
 @description('Client id of the atlas-ops-api registration (Phase 08 platform auth).')
 param opsApiClientId string = ''
 
+@description('Client id of the atlas-gateway registration (Phase 09 validate-jwt audience).')
+param gatewayAppClientId string = ''
+
 // ---------------------------------------------------------------------------- variables --
 
 // 8 lowercase chars, deterministic per (subscription, env, location). Every name derives from it.
 var resourceToken = toLower(take(uniqueString(subscription().id, environmentName, location), 8))
 var abbrs = loadJsonContent('./abbreviations.json')
 var rgName = 'rg-atlas-${environmentName}'
+
+// Deterministic, so the Functions and the container apps can be told where the gateway is without
+// depending on it (APIM depends on the Functions; this breaks the cycle).
+var gatewayUrl = 'https://${abbrs.apiManagementService}-atlas-${resourceToken}.azure-api.net'
+var apimAgentKeySecretUri = '${data.outputs.keyVaultUri}secrets/apim-agent-key'
 
 var tags = {
   'azd-env-name': environmentName
@@ -230,9 +238,11 @@ module computeAca './modules/compute-aca.bicep' = {
     azdEnvironmentName: environmentName
     foundryAccountName: foundry.outputs.accountName
     appInsightsId: observability.outputs.appInsightsId
-    // Phase 08: the agent tools read operational data through the ops API, not Cosmos. Phase 09
-    // repoints this one value at the APIM gateway.
-    opsApiUrl: '${computeFunctions.outputs.apiAppUrl}/api'
+    // Phase 09: the agent tools reach the ops API only through the gateway, as an agent.
+    opsApiUrl: '${gatewayUrl}/ops'
+    opsApiScope: 'api://atlas-gateway/.default'
+    apimKeySecretUri: apimAgentKeySecretUri
+    toolCatalogUrl: '${gatewayUrl}/ops-mcp/mcp'
     webAppClientId: webAppClientId
     webImage: webImage
     orchestratorImage: orchestratorImage
@@ -265,7 +275,8 @@ module computeFunctions './modules/compute-functions.bicep' = {
     foundryProjectEndpoint: foundry.outputs.projectEndpoint
     foundryAccountName: foundry.outputs.accountName
     embedDeploymentName: foundry.outputs.embedDeploymentName
-    opsApiClientId: opsApiClientId
+    gatewayUrl: gatewayUrl
+    apimKeySecretUri: apimAgentKeySecretUri
   }
 }
 
@@ -289,6 +300,34 @@ module apim './modules/apim.bicep' = {
 }
 
 // Logic Apps Standard on WS1, with its own shared-key storage account (CLAUDE.md 7.9).
+// Phase 09: the gateway's contents - APIs, MCP servers, policies, subscriptions, the key in Key Vault.
+module apimGateway './modules/apim-gateway.bicep' = {
+  name: 'apim-gateway'
+  scope: rg
+  params: {
+    apimName: apim.outputs.apimName
+    tenantId: tenant().tenantId
+    gatewayAppId: gatewayAppClientId
+    opsApiBaseUrl: '${computeFunctions.outputs.apiAppUrl}/api'
+    mcpAppBaseUrl: computeFunctions.outputs.mcpAppUrl
+    foundryAccountName: foundry.outputs.accountName
+    keyVaultName: data.outputs.keyVaultName
+    loggerId: apim.outputs.apimLoggerId
+  }
+}
+
+// Phase 09: both Function Apps accept only the gateway's identity.
+module functionsAuth './modules/functions-auth.bicep' = if (!empty(opsApiClientId)) {
+  name: 'functions-auth'
+  scope: rg
+  params: {
+    apiAppName: computeFunctions.outputs.apiAppName
+    mcpAppName: computeFunctions.outputs.mcpAppName
+    opsApiClientId: opsApiClientId
+    apimPrincipalId: apim.outputs.apimPrincipalId
+  }
+}
+
 module logicapps './modules/logicapps.bicep' = {
   name: 'logicapps'
   scope: rg
@@ -419,6 +458,10 @@ output ATLAS_KEYVAULT_URI string = data.outputs.keyVaultUri
 output ATLAS_APIM_NAME string = apim.outputs.apimName
 output ATLAS_APIM_GATEWAY_URL string = apim.outputs.apimGatewayUrl
 output ATLAS_APIM_PRINCIPAL_ID string = apim.outputs.apimPrincipalId
+output ATLAS_APIM_OPS_URL string = apimGateway.outputs.opsUrl
+output ATLAS_APIM_OPS_MCP_URL string = apimGateway.outputs.opsMcpUrl
+output ATLAS_APIM_KEY_SECRET_URI string = apimGateway.outputs.agentKeySecretUri
+output ATLAS_APIM_READONLY_KEY_SECRET_URI string = apimGateway.outputs.readonlyKeySecretUri
 output ATLAS_APIM_PRODUCT string = apim.outputs.agentToolsProductName
 
 output ATLAS_LOGICAPP_NAME string = logicapps.outputs.logicAppName

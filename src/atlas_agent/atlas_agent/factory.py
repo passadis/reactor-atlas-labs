@@ -31,6 +31,8 @@ from atlas_common.auth import get_async_credential
 from atlas_common.config import Settings
 from atlas_common.ops_client import OpsApiClient
 from atlas_common.repositories import CosmosStore, KnowledgeSearch
+from atlas_common.secrets import read_secret
+from atlas_common.tool_catalog import ToolCatalog
 from azure.core.credentials_async import AsyncTokenCredential
 from openai import APIStatusError
 from pydantic import ValidationError
@@ -317,11 +319,20 @@ class IncidentAgentRuntime:
         self.knowledge = KnowledgeSearch(settings, self.credential)
         self.client = build_model_client(settings, self.credential)
         # One value decides whether the tools read Cosmos directly or call the operations API
-        # (PHASE-08 section C). In Phase 09 that value becomes the APIM gateway.
-        self.ops: OpsApiClient | None = (
-            OpsApiClient(settings.ops_api_url, self.credential)
-            if settings.ops_api_url else None)
-        self.tools = AtlasTools(settings, self.store, self.knowledge, ops=self.ops)
+        # (PHASE-08 section C). Since Phase 09 that is the APIM gateway: a token for the gateway
+        # audience plus the subscription key, read from Key Vault by URI on first use.
+        self.ops: OpsApiClient | None = None
+        if settings.ops_api_url:
+            key_uri = settings.apim_key_secret_uri
+            self.ops = OpsApiClient(
+                settings.ops_api_url, self.credential, scope=settings.ops_api_scope,
+                key_provider=(lambda: read_secret(key_uri, self.credential)) if key_uri else None)
+        # Phase 09: one tool description in APIM, every agent surface (atlas_common.tool_catalog).
+        self.catalog: ToolCatalog | None = (
+            ToolCatalog(settings.tool_catalog_url, self.credential, settings.ops_api_scope)
+            if settings.tool_catalog_url else None)
+        self.tools = AtlasTools(settings, self.store, self.knowledge, ops=self.ops,
+                                catalog=self.catalog)
         self.instructions = InstructionStore(
             self.store, default_version=settings.instructions_version
         )
@@ -330,6 +341,7 @@ class IncidentAgentRuntime:
     async def agent(self, version: str | None = None) -> tuple[Agent, LoadedInstructions]:
         """A per-request agent bound to the requested (or active) instruction version."""
         loaded = await self.instructions.load(version)
+        await self.refresh_tool_catalog()
         now = self.settings.ops_now.strftime("%Y-%m-%d %H:%M UTC")
         agent = build_incident_agent(
             self.client,
@@ -338,6 +350,11 @@ class IncidentAgentRuntime:
             reasoning_effort=self.settings.reasoning_effort,
         )
         return agent, loaded
+
+    async def refresh_tool_catalog(self) -> None:
+        """Pick up tool descriptions changed in APIM. Cheap when fresh; never raises."""
+        if self.catalog is not None:
+            await self.catalog.refresh_if_stale()
 
     async def close(self) -> None:
         if self.ops is not None:

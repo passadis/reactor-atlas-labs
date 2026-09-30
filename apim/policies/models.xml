@@ -1,0 +1,37 @@
+<!--
+  atlas-models (/models): the Foundry model endpoint (OpenAI v1), governed.
+
+  Token limits per subscription, token metrics per agent and per case, and APIM's own managed
+  identity to the model - no client ever holds a model credential. Routing the orchestrator's own
+  model traffic through here is descoped (CLAUDE.md 7.12); the API is demoed with a direct call.
+-->
+<policies>
+  <inbound>
+    <base />
+    <llm-token-limit counter-key="@(context.Subscription.Id)" tokens-per-minute="20000"
+        estimate-prompt-tokens="true" remaining-tokens-header-name="x-atlas-remaining-tokens"
+        remaining-tokens-variable-name="remainingTokens" />
+    <llm-emit-token-metric namespace="atlas">
+      <dimension name="Subscription" value="@(context.Subscription.Id)" />
+      <dimension name="AgentName" value="@(context.Request.Headers.GetValueOrDefault("x-atlas-agent", "unknown"))" />
+      <dimension name="CaseId" value="@(context.Request.Headers.GetValueOrDefault("x-atlas-case-id", "none"))" />
+    </llm-emit-token-metric>
+    <authentication-managed-identity resource="https://cognitiveservices.azure.com" output-token-variable-name="model-token" />
+    <set-header name="Authorization" exists-action="override">
+      <value>@("Bearer " + (string)context.Variables["model-token"])</value>
+    </set-header>
+    <set-header name="api-key" exists-action="delete" />
+    <set-header name="Ocp-Apim-Subscription-Key" exists-action="delete" />
+    <set-backend-service backend-id="foundry-openai-backend" />
+  </inbound>
+  <backend>
+    <forward-request timeout="120" />
+  </backend>
+  <outbound>
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+    <include-fragment fragment-id="atlas-error-envelope" />
+  </on-error>
+</policies>

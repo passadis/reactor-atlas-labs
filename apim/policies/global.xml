@@ -1,0 +1,30 @@
+<!--
+  Global (all APIs, including the MCP servers).
+
+  Correlation first, so every later policy and every error can name the request. One metric per
+  request with the three dimensions the Episode 4 dashboards slice by. Nothing here reads a
+  response body: this scope includes the MCP servers, and touching the body breaks streaming.
+-->
+<policies>
+  <inbound>
+    <include-fragment fragment-id="atlas-correlation" />
+  </inbound>
+  <backend>
+    <forward-request />
+  </backend>
+  <outbound>
+    <set-header name="x-atlas-correlation-id" exists-action="override">
+      <value>@((string)context.Variables.GetValueOrDefault("correlation-id", ""))</value>
+    </set-header>
+    <emit-metric name="atlas-gateway-requests" namespace="atlas" value="1">
+      <dimension name="api_id" value="@(context.Api == null ? "none" : context.Api.Id)" />
+      <dimension name="operation_id" value="@(context.Operation == null ? "none" : context.Operation.Id)" />
+      <dimension name="subscription_id" value="@(context.Subscription == null ? "none" : context.Subscription.Id)" />
+    </emit-metric>
+  </outbound>
+  <on-error>
+    <set-header name="x-atlas-correlation-id" exists-action="override">
+      <value>@((string)context.Variables.GetValueOrDefault("correlation-id", ""))</value>
+    </set-header>
+  </on-error>
+</policies>

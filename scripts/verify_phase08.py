@@ -6,12 +6,16 @@ Seven checks, one per PHASE-08 acceptance criterion plus liveness:
 
 1. both function apps are Running and answer their health route;
 2. the hand-written OpenAPI spec is valid and matches the deployed routes exactly;
-3. the ops API refuses an anonymous call (401) and serves an Entra-authenticated one (200);
+3. the ops API refuses an anonymous call (401) and serves an agent's call (200);
 4. a ticket submitted twice with one Idempotency-Key is created once and replayed once;
 5. the MCP server lists its six tools, each saying when NOT to use it;
 6. a forged approval token is refused (403, typed) and audited; a genuine one is accepted once
    and refused on reuse;
 7. the deployed agents read through the ops API, and the switch is one configuration value.
+
+Since Phase 09 the Function Apps accept only APIM's managed identity, so every agent-side
+check goes through the gateway via the web app's /api/gateway/probe, whose identity holds
+Atlas.Agent - the path the real agents use.
 
 Writes application data only (a ticket, a verification approval record, one queued command that
 names a verification case). No control-plane writes. Exit non-zero on any failure. Wrapped by
@@ -34,13 +38,10 @@ from typing import Any
 import httpx
 from atlas_common.config import Settings, load_local_env
 from atlas_common.repositories.base import CosmosStore
-from azure.identity import AzureCliCredential
 
 from atlas_common import approval_tokens
-from scripts.mcp_probe import McpSession, mcp_app
 
 ROOT = Path(__file__).resolve().parents[1]
-OPS_SCOPE = "api://atlas-ops-api/.default"
 EXPECTED_TOOLS = {"search_ops_knowledge", "get_service_topology", "get_oncall", "open_ticket",
                   "submit_remediation", "get_remediation_status"}
 
@@ -68,15 +69,6 @@ def az(*args: str) -> str:
 def function_app(fragment: str) -> str:
     return az("functionapp", "list", "-g", os.environ["AZURE_RESOURCE_GROUP"], "--query",
               f"[?contains(name, '{fragment}')].name | [0]", "-o", "tsv")
-
-
-def ops() -> httpx.Client:
-    if "ops" not in ctx:
-        token = AzureCliCredential().get_token(OPS_SCOPE).token
-        ctx["ops"] = httpx.Client(base_url=ctx["api_url"], timeout=90,
-                                  headers={"Authorization": f"Bearer {token}"})
-    client: httpx.Client = ctx["ops"]
-    return client
 
 
 # ------------------------------------------------------------------------ 1 liveness --
@@ -109,45 +101,51 @@ def spec_matches() -> None:
 
 
 # ------------------------------------------------------------------------ 3 auth --
+# Since Phase 09 the Function App accepts only APIM's identity, so an agent's view is taken
+# through the web app's /api/gateway/probe (its managed identity holds Atlas.Agent).
+def probe(kind: str, **fields: Any) -> dict[str, Any]:
+    if "web" not in ctx:
+        from scripts.sse_probe import cli_token
+        ctx["web"] = httpx.Client(base_url=os.environ["ATLAS_WEB_URL"].rstrip("/"), timeout=180,
+                                  headers={"Authorization": f"Bearer {cli_token()}"})
+    r = ctx["web"].post("/api/gateway/probe", json={"kind": kind, **fields})
+    r.raise_for_status()
+    return dict(r.json())
+
+
 def auth_is_enforced() -> None:
     anon = httpx.get(f"{ctx['api_url']}/services/svc-checkout-api", timeout=90)
-    authed = ops().get("/services/svc-checkout-api")
-    name = authed.json().get("name") if authed.status_code == 200 else authed.text[:120]
-    check("3 anonymous calls get 401, Entra-authenticated calls get 200",
-          anon.status_code == 401 and authed.status_code == 200,
-          f"anonymous HTTP {anon.status_code}, bearer HTTP {authed.status_code} ({name})")
+    agent = probe("valid")
+    name = agent["body"].get("name") if isinstance(agent["body"], dict) else agent["body"]
+    check("3 anonymous calls get 401; an agent through the gateway gets 200",
+          anon.status_code == 401 and agent["status"] == 200,
+          f"direct anonymous HTTP {anon.status_code}, agent via APIM HTTP {agent['status']} "
+          f"({name})")
 
 
 # ------------------------------------------------------------------ 4 idempotency --
 def idempotent_ticket() -> None:
-    key = f"verify-p08-{uuid.uuid4().hex[:12]}"
-    body = {"case_id": "CASE-VERIFYP08", "severity": "Sev3",
-            "summary": "Phase 08 verification ticket, safe to ignore.",
-            "service_ids": ["svc-checkout-api"]}
-    first = ops().post("/tickets", json=body, headers={"Idempotency-Key": key})
-    second = ops().post("/tickets", json=body, headers={"Idempotency-Key": key})
-    one, two = first.json(), second.json()
-    ctx["idempotency"] = (f"key {key}: HTTP {first.status_code} {one.get('ticket_id')} then "
-                          f"HTTP {second.status_code} {two.get('ticket_id')} "
-                          f"Idempotency-Replayed={second.headers.get('Idempotency-Replayed')}")
+    result = probe("idempotency")
+    one, two = result["responses"]
+    ctx["idempotency"] = (f"key {result['key']}: HTTP {one['status']} {one['ticket_id']} then "
+                          f"HTTP {two['status']} {two['ticket_id']} "
+                          f"Idempotency-Replayed={two['replayed']}")
     check("4 one Idempotency-Key creates one ticket and replays it",
-          first.status_code == 201 and second.status_code == 200
-          and one.get("ticket_id") == two.get("ticket_id")
-          and second.headers.get("Idempotency-Replayed") == "true", ctx["idempotency"])
+          one["status"] == 201 and two["status"] == 200
+          and one["ticket_id"] == two["ticket_id"] and two["replayed"] == "true",
+          ctx["idempotency"])
 
 
 # ------------------------------------------------------------------------ 5 MCP --
 def mcp_tools() -> None:
-    base, key = mcp_app()
-    session = McpSession(base, key)
-    session.open()
-    listed = (session.rpc("tools/list").get("result") or {}).get("tools", [])
+    info = probe("mcp_tools")["servers"]["tools-mcp"]
+    listed = info.get("tools", [])
     names = {t["name"] for t in listed}
     silent = [t["name"] for t in listed if "NOT" not in t.get("description", "")]
     ctx["tools"] = sorted(names)
     check("5 the MCP server lists its six tools, each saying when not to use it",
           names == EXPECTED_TOOLS and not silent,
-          f"{len(listed)} tools: {', '.join(sorted(names))}"
+          f"{len(listed)} tools via APIM: {', '.join(sorted(names))}"
           + (f"; no negative guidance: {silent}" if silent else ""))
 
 
@@ -168,10 +166,8 @@ async def _mint(settings: Settings, case_id: str, plan_id: str) -> str:
     return minted.token
 
 
-def submit(case_id: str, plan_id: str, token: str) -> httpx.Response:
-    return ops().post("/remediation/commands",
-                      json={"case_id": case_id, "plan_id": plan_id, "approval_token": token},
-                      headers={"Idempotency-Key": f"verify-p08-{uuid.uuid4().hex[:12]}"})
+def submit(case_id: str, plan_id: str, token: str) -> dict[str, Any]:
+    return probe("remediation", case_id=case_id, plan_id=plan_id, approval_token=token)
 
 
 def tokens_cannot_be_forged() -> None:
@@ -180,21 +176,21 @@ def tokens_cannot_be_forged() -> None:
     plan_id = uuid.uuid4().hex[:16]  # the API accepts plan ids in the planner's shape only
 
     forged = submit(case_id, plan_id, approval_tokens.TOKEN_PREFIX + "forged" + "x" * 37)
-    body = forged.json()
+    body = forged["body"] if isinstance(forged["body"], dict) else {}
     cid = str(body.get("correlation_id", ""))
     audit = asyncio.run(_audit_rows(settings, case_id, cid)) if cid else []
     check("6 a forged approval token is refused with a typed 403 and audited",
-          forged.status_code == 403 and body.get("code") == "approval_invalid" and len(audit) == 1,
-          f"HTTP {forged.status_code} {body.get('code')}, correlation {cid}, "
+          forged["status"] == 403 and body.get("code") == "approval_invalid" and len(audit) == 1,
+          f"HTTP {forged['status']} {body.get('code')}, correlation {cid}, "
           f"{len(audit)} audit record(s)" + (f" code={audit[0].get('code')}" if audit else ""))
 
     token = asyncio.run(_mint(settings, case_id, plan_id))
     first = submit(case_id, plan_id, token)
     reuse = submit(case_id, plan_id, token)
     check("6 a genuine token is accepted once and refused on reuse",
-          first.status_code == 202 and reuse.status_code == 403,
-          f"first HTTP {first.status_code} {first.json().get('operation_id')}, "
-          f"reuse HTTP {reuse.status_code} {reuse.json().get('message', '')[:70]}")
+          first["status"] == 202 and reuse["status"] == 403,
+          f"first HTTP {first['status']} {first['body'].get('operation_id')}, "
+          f"reuse HTTP {reuse['status']} {str(reuse['body'].get('message', ''))[:70]}")
 
 
 # ------------------------------------------------------------------ 7 the one switch --
@@ -207,8 +203,9 @@ def one_value_switch() -> None:
         env = json.loads(az("containerapp", "show", "-g", rg, "-n", name, "--query",
                             "properties.template.containers[0].env", "-o", "json"))
         seen[name] = next((e.get("value", "") for e in env if e["name"] == "ATLAS_OPS_API_URL"), "")
-    check("7 web and orchestrator carry ATLAS_OPS_API_URL pointing at the ops API",
-          all(v.rstrip("/") == ctx["api_url"] for v in seen.values()),
+    gateway_ops = os.environ["ATLAS_APIM_GATEWAY_URL"].rstrip("/") + "/ops"
+    check("7 web and orchestrator carry ATLAS_OPS_API_URL (the gateway since Phase 09)",
+          all(v.rstrip("/") == gateway_ops for v in seen.values()),
           "; ".join(f"{k}={v or '(unset)'}" for k, v in seen.items()))
 
     from scripts.sse_probe import cli_token

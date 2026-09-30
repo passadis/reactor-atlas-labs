@@ -134,6 +134,9 @@ resource diagnostics 'Microsoft.ApiManagement/service/diagnostics@2024-05-01' = 
     httpCorrelationProtocol: 'W3C'
     verbosity: 'information'
     logClientIp: true
+    // Phase 09: emit-metric and llm-emit-token-metric write nothing without this. The metrics and
+    // every dimension (CaseId, AgentName) land in the App Insights customMetrics table.
+    metrics: true
     sampling: {
       samplingType: 'fixed'
       percentage: 100

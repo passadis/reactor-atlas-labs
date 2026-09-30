@@ -24,6 +24,7 @@ import json
 import logging
 import re
 import secrets
+import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -94,8 +95,54 @@ def dump(model: BaseModel) -> dict[str, Any]:
     return model.model_dump(mode="json")
 
 
-async def guarded(cid: str, work: Callable[[], Awaitable[Result]]) -> Result:
+CONTROL = "control"
+CHAOS_DOC_ID = "chaos-ops-api"
+CHAOS_CACHE_S = 3.0
+
+
+class ChaosSwitch:
+    """The ops API's application-level outage switch (CLAUDE.md 9.3).
+
+    `scripts/chaos/ops_api_down.sh` writes one document to the `control` container; while it is
+    enabled and unexpired, every route except /health answers a typed 503. The gateway's retry
+    policy, the client's circuit breaker and the agent's degraded mode are then exercised for real -
+    with no control-plane write, no stopped Function App and no cold start on the way back.
+    The document always carries an expiry, so a forgotten switch turns itself off.
+
+    Read at most every few seconds per worker. A failure to READ the switch is never an outage.
+    """
+
+    def __init__(self, store: Callable[[], Any], *, cache_s: float = CHAOS_CACHE_S) -> None:
+        self._store, self._cache_s = store, cache_s
+        self._state: tuple[float, bool] | None = None
+
+    async def active(self) -> bool:
+        now = time.monotonic()
+        if self._state is not None and now - self._state[0] < self._cache_s:
+            return self._state[1]
+        on = False
+        try:
+            rows = await asyncio.wait_for(self._store().query(
+                CONTROL, "SELECT * FROM c WHERE c.id = @id",
+                [{"name": "@id", "value": CHAOS_DOC_ID}], partition_key=CHAOS_DOC_ID), 2.0)
+            doc = rows[0] if rows else {}
+            expires = doc.get("expires_at")
+            on = bool(doc.get("enabled")) and (
+                not expires or datetime.fromisoformat(str(expires)) > datetime.now(UTC))
+        except Exception:
+            log.warning("chaos switch unreadable; treating as off", exc_info=True)
+        self._state = (now, on)
+        return on
+
+
+async def guarded(cid: str, work: Callable[[], Awaitable[Result]], *,
+                  chaos: ChaosSwitch | None = None) -> Result:
     """Run a handler under a timeout, turning every failure into a typed envelope."""
+    if chaos is not None and await chaos.active():
+        result = error(503, "unavailable", "the operations API is temporarily unavailable", cid)
+        result.headers["x-atlas-chaos"] = "on"
+        result.headers.setdefault("x-atlas-correlation-id", cid)
+        return result
     try:
         async with asyncio.timeout(STORE_TIMEOUT_S * 3):
             result = await work()

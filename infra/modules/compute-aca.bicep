@@ -90,6 +90,15 @@ var workerAppName = '${abbrs.appContainerApp}-atlas-worker-${resourceToken}'
 @description('Base URL of the operations API. Empty keeps the agent tools on direct Cosmos reads.')
 param opsApiUrl string = ''
 
+@description('Token scope for the operations API: the gateway audience since Phase 09.')
+param opsApiScope string = 'api://atlas-ops-api/.default'
+
+@description('Key Vault secret URI of the agent APIM subscription key. Empty: no key sent.')
+param apimKeySecretUri string = ''
+
+@description('APIM MCP server whose tools/list supplies the tool descriptions. Empty: docstrings.')
+param toolCatalogUrl string = ''
+
 var commonEnv = [
   { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }
   { name: 'ATLAS_COSMOS_ENDPOINT', value: cosmosEndpoint }
@@ -104,6 +113,11 @@ var commonEnv = [
   { name: 'AZURE_ENV_NAME', value: azdEnvironmentName }
   // THE switch (PHASE-08 section C): set, and the agent tools call the operations API over HTTP.
   { name: 'ATLAS_OPS_API_URL', value: opsApiUrl }
+  // Phase 09: through the gateway, as an agent. The key is fetched by URI, never held in config.
+  { name: 'ATLAS_OPS_API_SCOPE', value: opsApiScope }
+  { name: 'ATLAS_APIM_KEY_SECRET_URI', value: apimKeySecretUri }
+  // One tool description, four surfaces: descriptions come from the APIM MCP server.
+  { name: 'ATLAS_TOOL_CATALOG_URL', value: toolCatalogUrl }
 ]
 
 // ---------------------------------------------------------------------------- registry --

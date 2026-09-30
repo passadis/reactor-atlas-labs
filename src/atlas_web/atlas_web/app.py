@@ -52,6 +52,7 @@ from atlas_common.config import Settings, load_local_env
 from atlas_common.entitlements import can_approve, can_chat
 from atlas_common.repositories import EntitlementRepository, RepositoryUnavailableError
 from atlas_common.telemetry import configure_telemetry, current_traceparent, span, trace_id
+from atlas_common.tool_catalog import call_mcp_tool, list_mcp_tools
 from azure.ai.projects.aio import AIProjectClient
 from azure.identity.aio import get_bearer_token_provider
 from azure.search.documents.aio import SearchClient
@@ -178,6 +179,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await state.search.close()
         await state.project.close()
         await state.runtime.close()
+
+
+class GatewayProbe(BaseModel):
+    kind: Literal["valid", "malformed", "backend_down", "mcp_tools", "idempotency", "remediation"]
+    # "remediation" only. The approval token IS the authorisation: without a genuine, unspent
+    # token for this case and plan the ops API refuses and audits, whoever asks.
+    case_id: str | None = Field(default=None, pattern=r"^CASE-[A-Z0-9]+$")
+    plan_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{16}$")
+    approval_token: str | None = Field(default=None, max_length=200)
 
 
 def create_app() -> FastAPI:
@@ -664,6 +674,112 @@ def _routes(app: FastAPI) -> None:
         return {"turn_id": turn_id, "trace_id": tid,
                 "traceparent": f"00-{tid}-0000000000000000-01", "app_insights": link}
 
+    # -- gateway probe (Phase 09) ------------------------------------------------------------
+    @app.post("/api/gateway/probe")
+    async def gateway_probe(body: GatewayProbe, request: Request,
+                            _: Annotated[Principal, Depends(current_principal)]) -> dict[str, Any]:
+        """What the gateway does to an AGENT's call, made with this app's own agent identity.
+
+        scripts/prove_governance.py drives this for the proofs that need an Atlas.Agent caller.
+        The signed-in operator deliberately holds no such role - calling the gateway as
+        themselves is proof 3 (403). Fixed, harmless requests only; nothing here takes a URL or
+        a body from the caller.
+        """
+        state = atlas(request)
+        ops = state.runtime.ops
+        settings = state.runtime.settings
+        if ops is None:
+            raise HTTPException(409, "the agent tools are not routed through the gateway")
+        t0 = time.perf_counter()
+        if body.kind == "mcp_tools":
+            gateway = settings.ops_api_url.rsplit("/ops", 1)[0]
+            token = await state.runtime.credential.get_token(settings.ops_api_scope)
+            servers: dict[str, Any] = {}
+            auth = {"Authorization": f"Bearer {token.token}"}
+            # One real tool call per server as well as the listing: APIM writes one request row
+            # with gen_ai.* dimensions per tool call, which verify_phase09 looks for.
+            sample = {"ops-mcp": ("lookup_service", {"service_id": "svc-payments"}),
+                      "tools-mcp": ("get_oncall", {"service_id": "svc-payments"})}
+            for name in ("ops-mcp", "tools-mcp"):
+                url = f"{gateway}/{name}/mcp"
+                errors: list[str] = []
+                # One retry, and the report says so: a cold path is worth knowing about, and a
+                # retry must never make a flaky server look healthy.
+                for _attempt in range(2):
+                    try:
+                        listed = await list_mcp_tools(url, auth, timeout_s=30.0)
+                        tool_name, args = sample[name]
+                        called = await call_mcp_tool(url, auth, tool_name, args)
+                        servers[name] = {
+                            "status": "ok", "attempts": len(errors) + 1, "errors": errors,
+                            "tools": [{"name": t.get("name"),
+                                       "description": str(t.get("description") or "")}
+                                      for t in listed],
+                            "sample_call": {"tool": tool_name, "ok": not called.get("isError")
+                                            and "error" not in called}}
+                        break
+                    except Exception as exc:
+                        errors.append(f"{type(exc).__name__}: {str(exc)[:200]}")
+                else:
+                    servers[name] = {"status": "error", "attempts": 2, "errors": errors,
+                                     "detail": errors[-1]}
+            catalog = state.runtime.catalog
+            if catalog is not None:
+                await catalog.refresh_if_stale()
+            orchestrator: Any = None
+            orch_url = os.environ.get("ATLAS_ORCHESTRATOR_URL", "")
+            if orch_url:
+                try:
+                    orchestrator = (await state.http.get(f"{orch_url}/api/health")).json().get(
+                        "tool_catalog")
+                except Exception as exc:
+                    orchestrator = {"error": type(exc).__name__}
+            return {"kind": body.kind, "servers": servers,
+                    "catalog": None if catalog is None else {
+                        "url": catalog.url, "digest": catalog.digest,
+                        "descriptions": catalog.descriptions,
+                        "last_error": catalog.last_error},
+                    "orchestrator_catalog": orchestrator,
+                    "ms": round((time.perf_counter() - t0) * 1000)}
+        if body.kind == "valid":
+            response = await ops.send_once("GET", "/services/svc-checkout-api")
+        elif body.kind == "malformed":
+            # Wrong types, a severity outside the enum, an unknown field: the spec refuses all
+            # three, so the gateway answers 400 and the Function App never runs.
+            response = await ops.send_once(
+                "POST", "/tickets",
+                content='{"case_id": 42, "severity": "Sev9", "summary": "x", "surprise": true}')
+        elif body.kind == "idempotency":
+            # The same ticket twice under one key: created once, replayed once (Phase 08).
+            key = f"probe-idem-{uuid.uuid4().hex[:12]}"
+            ticket = {"case_id": "CASE-PROBE", "severity": "Sev4",
+                      "summary": "Gateway idempotency probe, safe to ignore.",
+                      "service_ids": ["svc-checkout-api"]}
+            first = await ops.send_once("POST", "/tickets", json=ticket, idempotency_key=key)
+            second = await ops.send_once("POST", "/tickets", json=ticket, idempotency_key=key)
+            return {"kind": body.kind, "key": key, "responses": [
+                {"status": r.status_code, "ticket_id": r.json().get("ticket_id"),
+                 "replayed": r.headers.get("Idempotency-Replayed")} for r in (first, second)],
+                "ms": round((time.perf_counter() - t0) * 1000)}
+        elif body.kind == "remediation":
+            if not (body.case_id and body.plan_id and body.approval_token is not None):
+                raise HTTPException(422, "case_id, plan_id and approval_token are required")
+            response = await ops.send_once(
+                "POST", "/remediation/commands",
+                json={"case_id": body.case_id, "plan_id": body.plan_id,
+                      "approval_token": body.approval_token})
+        else:  # "backend_down": run while scripts/chaos_flag.py has the ops API returning 503
+            response = await ops.send_once("GET", "/services/svc-checkout-api")
+        try:
+            payload: Any = response.json()
+        except ValueError:
+            payload = response.text[:500]
+        keep = ("x-atlas-correlation-id", "x-atlas-gateway-attempts", "x-atlas-chaos",
+                "retry-after", "x-atlas-remaining-calls")
+        return {"kind": body.kind, "status": response.status_code,
+                "headers": {k: v for k, v in response.headers.items() if k.lower() in keep},
+                "body": payload, "ms": round((time.perf_counter() - t0) * 1000)}
+
     # -- health --------------------------------------------------------------------------------
     @app.get("/api/live", include_in_schema=False)
     async def live() -> dict[str, str]:
@@ -709,11 +825,13 @@ def _routes(app: FastAPI) -> None:
         async def ops_api() -> str:
             # Which door the agent tools use (PHASE-08 section C). Not required: the tools degrade
             # to a typed "could not reach" answer rather than taking the web app down.
-            url = state.runtime.settings.ops_api_url
-            if not url:
+            ops = state.runtime.ops
+            if ops is None:
                 return "not configured, tools read Cosmos directly"
-            response = await state.http.get(f"{url.rstrip('/')}/health")
-            return f"HTTP {response.status_code}, tools on {state.runtime.tools.backend}"
+            # With this app's identity and key, exactly as the tools call it.
+            response = await ops.send_once("GET", "/health", timeout_s=HEALTH_TIMEOUT_S)
+            return (f"HTTP {response.status_code} via {ops.base_url}, "
+                    f"tools on {state.runtime.tools.backend}")
 
         await asyncio.gather(
             probe("cosmos", True, cosmos()),

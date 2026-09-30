@@ -479,8 +479,12 @@ resource operatorStorageContributor 'Microsoft.Authorization/roleAssignments@202
 
 // ---------------------------------------------------------------------------- key vault --
 
+var keyVaultReaders = [orchestratorPrincipalId, logicPrincipalId, workerPrincipalId, apimPrincipalId, webPrincipalId, funcPrincipalId]
+
 resource keyVaultSecretsUsers 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
-  for p in [orchestratorPrincipalId, logicPrincipalId, workerPrincipalId, apimPrincipalId]: {
+  // web, func and the hosted agent joined in Phase 09: each reads the APIM subscription key by
+  // secret URI at startup (the one permitted secret, CLAUDE.md section 1).
+  for p in concat(keyVaultReaders, empty(hostedAgentPrincipalId) ? [] : [hostedAgentPrincipalId]): {
     name: guid(keyVault.id, p, roles.keyVaultSecretsUser)
     scope: keyVault
     properties: {

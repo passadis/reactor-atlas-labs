@@ -1,0 +1,43 @@
+<!--
+  atlas-readonly product: inspection and demonstration.
+
+  Reads only - anything that could change state is refused before it reaches an API (model calls
+  are POSTs but change nothing, so they pass). A much smaller model token budget than the agents'
+  product, so governance proof 7 (token limit exceeded) runs in seconds against this key without
+  ever throttling a live agent.
+-->
+<policies>
+  <inbound>
+    <base />
+    <choose>
+      <when condition="@(context.Request.Method != "GET" &amp;&amp; context.Api.Id != "atlas-models")">
+        <return-response>
+          <set-status code="403" reason="Forbidden" />
+          <set-header name="Content-Type" exists-action="override">
+            <value>application/json</value>
+          </set-header>
+          <set-body>@(new JObject(
+              new JProperty("code", "forbidden"),
+              new JProperty("message", "The read-only product cannot change anything."),
+              new JProperty("correlation_id", (string)context.Variables.GetValueOrDefault("correlation-id", ""))
+          ).ToString())</set-body>
+        </return-response>
+      </when>
+    </choose>
+    <choose>
+      <when condition="@(context.Api.Id == "atlas-models")">
+        <llm-token-limit counter-key="@("readonly-" + context.Subscription.Id)" tokens-per-minute="600"
+            estimate-prompt-tokens="true" remaining-tokens-header-name="x-atlas-remaining-tokens" />
+      </when>
+    </choose>
+  </inbound>
+  <backend>
+    <base />
+  </backend>
+  <outbound>
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>

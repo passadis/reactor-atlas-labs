@@ -43,6 +43,11 @@ RG="$(get AZURE_RESOURCE_GROUP)"
 # the agent. See agents/README.md.
 AZURE_ENV_NAME="$ENV_NAME" bash scripts/seed_agents_env.sh
 
+# --- 2b. gateway app roles ----------------------------------------------------
+# Atlas.Agent for every workload identity that calls tools through APIM (Phase 09). Entra objects,
+# so not Bicep. Idempotent; never fails provisioning, verify_phase09 reports a gap.
+bash scripts/assign_gateway_roles.sh || echo "postprovision: WARN gateway role assignment incomplete"
+
 # --- 3. wait for role-assignment propagation --------------------------------
 # Poll something that actually needs a data-plane role rather than sleeping blindly. Cosmos is the
 # strictest: local auth is disabled, so a token without the SQL role assignment fails outright.

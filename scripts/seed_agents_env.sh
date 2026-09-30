@@ -36,6 +36,12 @@ SEEDED="$(mktemp)"
   echo "ATLAS_COSMOS_DATABASE=$(get ATLAS_COSMOS_DATABASE)"
   echo "ATLAS_SEARCH_ENDPOINT=$(get ATLAS_SEARCH_ENDPOINT)"
   echo "ATLAS_FOUNDRY_ACCOUNT_NAME=${ACCOUNT}"
+  # Phase 09: the hosted agent's tools go through the gateway like every other surface. The key
+  # is a Key Vault URI, never a value - the agent reads it with its own Entra agent identity.
+  echo "ATLAS_OPS_API_URL=$(get ATLAS_APIM_OPS_URL)"
+  echo "ATLAS_OPS_API_SCOPE=api://atlas-gateway/.default"
+  echo "ATLAS_APIM_KEY_SECRET_URI=$(get ATLAS_APIM_KEY_SECRET_URI)"
+  echo "ATLAS_TOOL_CATALOG_URL=$(get ATLAS_APIM_OPS_MCP_URL)"
   echo "ATLAS_RAI_POLICY_ID=/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.CognitiveServices/accounts/${ACCOUNT}/raiPolicies/$(get ATLAS_RAI_POLICY_NAME)"
   # What `azd ai agent init --project-id` writes for an existing project (captured 2026-09-19,
   # azure.ai.agents 1.0.0-beta.15): use the project Bicep made, code deploy needs no ACR.

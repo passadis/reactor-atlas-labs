@@ -30,6 +30,7 @@ from atlas_common.models import Person, Service
 from atlas_common.ops_client import OpsApiClient
 from atlas_common.repositories import CosmosStore, KnowledgeSearch
 from atlas_common.repositories.cosmos_repos import EntitlementRepository, ServiceRepository
+from atlas_common.secrets import read_secret
 from atlas_common.telemetry import configure_telemetry
 from opsmcp import tools
 
@@ -48,7 +49,13 @@ class LiveBackend:
         self._settings = Settings.from_env()
         self._store = CosmosStore(self._settings, self._credential)
         self._search = KnowledgeSearch(self._settings, self._credential)
-        self._ops = OpsApiClient(os.environ.get("ATLAS_OPS_API_URL", ""), self._credential)
+        # Through the gateway since Phase 09, as an agent: a token for api://atlas-gateway (the
+        # function identity holds Atlas.Agent) and the subscription key read from Key Vault.
+        key_uri = self._settings.apim_key_secret_uri
+        self._ops = OpsApiClient(
+            self._settings.ops_api_url or os.environ.get("ATLAS_OPS_API_URL", ""),
+            self._credential, scope=self._settings.ops_api_scope,
+            key_provider=(lambda: read_secret(key_uri, self._credential)) if key_uri else None)
 
     async def services(self) -> list[Service]:
         return await ServiceRepository(self._store).list_all()

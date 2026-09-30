@@ -1251,3 +1251,163 @@ are model output and are not compared.
 
 The hosted agent (Phase 05) still reads Cosmos: it is deployed through `agents/azure.yaml`, and
 routing it through the gateway is Phase 09 work, not a second switch here.
+
+## 16. AI gateway findings (Phase 09, 2026-09-30)
+
+### 16.1 Sources checked
+
+Microsoft Learn, 2026-09-30: `api-management/mcp-server-overview`, `export-rest-mcp-server`,
+`expose-existing-mcp-server`, `secure-mcp-servers`, `manage-mcp-servers-rest-api`,
+`monitor-mcp-servers`, `api-management-policies#ai-gateway`, `llm-token-limit-policy`,
+`llm-emit-token-metric-policy`, `api-management-howto-app-insights#emit-custom-metrics`,
+`foundry/agents/how-to/tools/toolbox`, `foundry/agents/how-to/tools/model-context-protocol`,
+`azure-functions/functions-mcp-tutorial`, `functions-bindings-mcp`.
+
+StandardV2 supports every policy used here: `llm-token-limit`, `llm-emit-token-metric` (V2 "Yes"),
+`validate-jwt`, `validate-content`, `rate-limit-by-key`, `quota-by-key`, `retry`,
+`authentication-managed-identity`, `emit-metric`, policy fragments. MCP server management needs
+ARM API version `2025-09-01-preview` or later; everything else uses `2024-05-01`.
+
+### 16.2 `mcpProperties.endpoints` is a dictionary, not an array (doc and Bicep types are wrong)
+
+`manage-mcp-servers-rest-api` shows, in REST, ARM and Bicep alike:
+
+    mcpProperties: { transportType: 'streamable', endpoints: [ { name: 'message', uriTemplate: '/mcp' } ] }
+
+The live API (2025-09-01-preview, eastus2, 2026-09-30) rejects that at validation:
+`Cannot deserialize the current JSON array ... into type Dictionary<String, McpEndpointContract>
+... Path 'mcpProperties.endpoints'`. What deploys is a map keyed by endpoint name:
+
+    endpoints: { message: { uriTemplate: '/mcp' } }
+
+Bicep's bundled type for the property still says `McpEndpoint[]` and emits BCP036 as a warning;
+the live API wins (CLAUDE.md section 0). Recorded in `infra/modules/apim-gateway.bicep`.
+
+### 16.3 The toolbox reaches APIM as the project's managed identity (decision)
+
+PHASE-09 section 3 asks to pick project managed identity or agentic identity for the toolbox's
+MCP servers. Chosen: **project managed identity**, audience `api://atlas-gateway`, which holds
+`Atlas.Agent`. The toolbox is shared - the prompt agent and any future consumer reach the gateway
+as one governed principal, which is also what the per-agent rate limit counts. A `project-managed-
+identity` RemoteTool connection is supported (`azd ai connection create --auth-type
+project-managed-identity --audience ...`).
+
+Consequence: the two MCP servers are **not** subscription-gated (`subscriptionRequired: false`).
+A connection carries one credential; a subscription key stored in a Foundry connection would sit
+outside Key Vault, which CLAUDE.md section 1 forbids. The MCP servers are gated by identity instead
+(Entra token + `Atlas.Agent`) and rate limited per calling identity. The REST APIs (`/ops`,
+`/models`) require identity AND a subscription key.
+
+Toolbox tool names are prefixed by server label: `atlas_ops___lookup_service`. The in-process
+agents keep the bare names; the descriptions are the same text.
+
+### 16.4 The Function Apps accept only APIM
+
+Phase 08 checked the audience only, so any tenant identity with a token for `api://atlas-ops-api`
+could call the ops API directly. `infra/modules/functions-auth.bicep` adds
+`defaultAuthorizationPolicy.allowedPrincipals.identities = [<APIM principal id>]` to both apps.
+The MCP app drops its `mcp_extension` system key: `AzureFunctionsJobHost__extensions__mcp__system__
+webhookAuthorizationLevel=Anonymous` plus the same platform lock, the pairing
+`functions-mcp-tutorial` documents. There is no function key anywhere to leak.
+
+Operator consequence: `scripts/mcp_probe.py` (direct, system key) no longer works by design. The
+tools are listed through the gateway by an agent identity - the web app's `/api/gateway/probe`.
+
+### 16.5 One description, four surfaces
+
+APIM holds the tool descriptions of `atlas-ops-mcp` (`apim/mcp/atlas-ops-mcp-tools.json`, one
+`apis/tools` resource each). The prompt agent sees them through the toolbox. The web app, the
+orchestrator and the hosted agent run the same tools in-process; `atlas_common.tool_catalog`
+reads `tools/list` from the same server (60 s cache) and overrides each in-process tool's
+description by name, **in place** - the orchestrator builds its agents once per workflow shape,
+and Agent Framework reads `FunctionTool.description` every time it sends the schema, so mutating
+the live object reaches an already-built agent. A dead gateway keeps the last good text or the
+docstrings; `tests/test_gateway.py` keeps the docstrings equal to the governed JSON so an outage
+never silently changes what the model is told.
+
+### 16.6 Where the gateway is NOT on the path (said out loud)
+
+- **Model calls.** The orchestrator's own model traffic stays direct (CLAUDE.md 7.12). `/models`
+  exists with token limits and metrics and is demoed with a direct call.
+- **Knowledge retrieval.** `search_knowledge` reads Azure AI Search directly (the toolbox's
+  `atlas_knowledge` likewise, through the project's search connection). The operational
+  backends - catalogue, incidents, changes, telemetry, tickets, remediation - are all behind APIM.
+- **The app's own state.** Cases, checkpoints, sessions and instructions stay in Cosmos: that is
+  the application's database, not a tool backend.
+
+### 16.7 Response-body logging and MCP
+
+`export-rest-mcp-server` troubleshooting: "MCP server streaming fails when diagnostic logs are
+enabled | Logging of response body ... interferes with MCP transport | Disable response body
+logging at the All APIs scope". That settles CLAUDE.md 7.8's open question: global body logging
+stays at 0 bytes. Payload logging is enabled per server on `atlas-tools-mcp` only (the
+`monitor-mcp-servers` path).
+
+### 16.8 Custom metrics need `metrics: true`, not the preview opt-in
+
+`emit-metric` and `llm-emit-token-metric` write nothing until the APIM diagnostic has
+`metrics: true` (now in `apim.bicep`). The App Insights "custom metrics with dimensions" opt-in
+only affects the preaggregated metrics store; the `customMetrics` table always carries every
+dimension (`metrics-overview`), so `CaseId` and `AgentName` are queryable without it.
+
+### 16.9 A passthrough MCP server authenticates through a backend entity, not a policy
+
+First deployment: `atlas-tools-mcp` answered `initialize` itself ("serverInfo: Azure API
+Management"), then `tools/list` returned `[]` in 15 ms and every `tools/call` a 500 - with an
+`authentication-managed-identity` + `set-header` in the server's policy, exactly as the
+`secure-mcp-servers` page suggests for outbound auth.
+
+Cause: APIM discovers a passthrough server's tools itself, outside the request pipeline, so the
+policy never runs for that call. The Function App (locked to APIM's identity, 16.4) refused the
+unauthenticated discovery and APIM cached an empty tool list. Proven on a scratch server the same
+day: identical settings plus `backendId` pointing at a `backends` entity with
+`credentials.managedIdentity.resource = api://atlas-ops-api` listed all six tools and served a
+real `get_oncall` call. `apim-gateway.bicep` now does exactly that; the policy only checks the
+agent and strips its token.
+
+The same scratch test showed `mcpProperties.transportType` is accepted but not returned on GET;
+the endpoint map is what the service keeps. Harmless, noted so nobody chases it.
+
+### 16.10 The toolbox caches the MCP tool list, and asking keeps the cache alive
+
+The pack says a tool-list change reaches agents in "up to 60 s" (CLAUDE.md 9.6). Measured
+2026-09-30 by changing one `atlas-ops-mcp` description in APIM and watching every surface:
+
+| How the toolbox was polled | Prompt agent saw the change |
+|---|---|
+| every ~10 s | not within 420 s |
+| every 60 s (one run) | at 267 s |
+| every 60 s (`scripts/tool_description_change.py`) | at 68 s |
+
+The toolbox cache behaves as a **sliding expiry**: each `tools/list` against the toolbox keeps its
+cached copy of the APIM server's tools alive, so frequent asking delays the very refresh being
+watched. The script now asks the toolbox at most once a minute. The in-process surfaces read APIM
+directly (`atlas_common.tool_catalog`, 60 s cache): orchestrator 35.6 s, web 68.0 s, hosted agent
+105.8 s (on its next request) in the same run - all four in under two minutes.
+
+A fourth run with the same 60 s polling saw nothing in 420 s. The cache is not something to wait
+on. What is deterministic: **publishing a new toolbox version** with the same definition makes
+Foundry rediscover every MCP server's tools at once - the prompt agent had the new text 9 s after
+the publish. `scripts/upsert_toolbox.publish()` does exactly that (same tools, new version, made
+default; tagged `published_for` in the metadata), and `scripts/tool_description_change.py` calls it
+after the change and again after the restore. Final measured run, 2026-09-30: prompt agent 4.0 s,
+web 4.0 s, orchestrator 17.5 s, hosted agent 56.7 s (its next request).
+
+So the honest description of the governance model is: APIM holds the description; the in-process
+agents follow it within a minute on their own; the prompt agent follows it when the toolbox is
+republished - one command, no agent redeploy. Toolbox versions accumulate with each publish; they
+are cheap and immutable, and `upsert_toolbox --check` still compares the definition fingerprint.
+
+### 16.11 Windows tooling traps met while verifying (2026-09-30)
+
+- `subprocess.run(["bash", ...])` from Python on Windows starts **WSL's** `System32ash.exe`
+  (CreateProcess searches System32 before PATH), which inherits none of the environment. Use
+  `shutil.which("bash")` (Git Bash). `verify_phase09` does.
+- `Path.write_text` on Windows writes CRLF. A shell script edited that way fails under a plain
+  bash with `$'': command not found`. `.gitattributes` keeps the index LF; edit tooling now
+  writes bytes. 173 working-tree files were normalised to LF.
+- `az.cmd` mangles JMESPath with `==`, `||` or `[]` projections, and multi-line `--body` JSON.
+  Filter in Python, pass bodies as `@file`, and query App Insights over REST where a hung az child
+  could outlive `subprocess`'s own timeout.
+- `AzureCliCredential.get_token("api://x/scope")` sends a delegated scope as `--resource`; use
+  `az account get-access-token --scope` for delegated operator tokens.
