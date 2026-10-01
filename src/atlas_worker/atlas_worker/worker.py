@@ -36,7 +36,7 @@ from atlas_common.remediation import (
     service_bus_namespace,
 )
 from atlas_common.repositories.base import CosmosStore
-from atlas_common.telemetry import configure_telemetry
+from atlas_common.telemetry import bound, configure_telemetry
 from azure.servicebus import NEXT_AVAILABLE_SESSION, ServiceBusMessage
 from azure.servicebus.aio import AutoLockRenewer, ServiceBusClient
 from azure.servicebus.exceptions import OperationTimeoutError, SessionCannotBeLockedError
@@ -120,7 +120,10 @@ class Worker:
                  else v for k, v in (message.application_properties or {}).items()}
         parent = extract({"traceparent": str(props.get("traceparent", ""))})
         delivery = int(message.delivery_count or 0) + 1
-        with tracer.start_as_current_span(
+        # CorrelationId is the case (atlas_common.remediation): bound before the span starts, so the
+        # worker span and every Cosmos and Service Bus span under it carry atlas.case_id.
+        case_id = str(message.correlation_id or "") or None
+        with bound(case_id=case_id, node="worker"), tracer.start_as_current_span(
             "atlas.worker.remediation", context=parent,
             attributes={"messaging.system": "servicebus", "messaging.destination": COMMANDS_QUEUE,
                         "messaging.message.id": str(message.message_id),

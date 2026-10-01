@@ -2,6 +2,10 @@
 
     uv run python -m scripts.dlq_replay --command-id OP-XXXX --fix
     uv run python -m scripts.dlq_replay --command-id OP-XXXX          # cause already fixed
+    uv run python -m scripts.dlq_replay --command-id OP-XXXX --discard    # can never succeed
+
+`--discard` removes a dead letter that no replay can fix (a forged or orphaned command the worker
+refused - `rejected:no_case`, say) without re-sending it. It changes nothing else.
 
 What it does, in order:
 1. `--fix` turns the RB-0099 fault switch off (a data write in the `control` container).
@@ -37,7 +41,7 @@ CONTROL = "control"
 FAULT_DOC = "fault-rb-0099"
 
 
-async def replay(operation_id: str, fix: bool) -> int:
+async def replay(operation_id: str, fix: bool, discard: bool = False) -> int:
     settings = Settings.from_env()
     async with AzureCliCredential() as cred, CosmosStore(settings, cred) as store, \
             ServiceBusClient(service_bus_namespace(), credential=cred) as client:
@@ -51,17 +55,31 @@ async def replay(operation_id: str, fix: bool) -> int:
                                         max_wait_time=10)
         async with dlq:
             target = None
-            for message in await dlq.receive_messages(max_message_count=100, max_wait_time=10):
-                body = json.loads(str(message))
-                if body.get("operation_id") == operation_id and target is None:
-                    target = (message, body)
-                else:
-                    await dlq.abandon_message(message)  # leave everyone else where they were
+            others = []
+            # One receive can return part of what is there; keep asking until a call comes back
+            # empty. Others stay locked until the end so the scan does not see them twice.
+            while target is None:
+                batch = await dlq.receive_messages(max_message_count=100, max_wait_time=5)
+                if not batch:
+                    break
+                for message in batch:
+                    body = json.loads(str(message))
+                    if body.get("operation_id") == operation_id and target is None:
+                        target = (message, body)
+                    else:
+                        others.append(message)
+            for other in others:
+                await dlq.abandon_message(other)  # leave everyone else where they were
             if target is None:
                 print(f"no dead-lettered command for {operation_id}")
                 return 1
             message, body = target
             case_id = str(body["case_id"])
+            if discard:
+                await dlq.complete_message(message)
+                print(f"discarded {operation_id} (case {case_id}, "
+                      f"reason {message.dead_letter_reason}); nothing was re-sent")
+                return 0
 
             rows = await store.query(APPROVALS, "SELECT * FROM c WHERE c.id = @id",
                                      [{"name": "@id", "value": f"operation:{operation_id}"}],
@@ -107,9 +125,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--command-id", required=True, help="the operation id, OP-...")
     parser.add_argument("--fix", action="store_true", help="turn the RB-0099 fault off first")
+    parser.add_argument("--discard", action="store_true",
+                        help="remove the dead letter without replaying it")
     args = parser.parse_args(argv)
     load_local_env()
-    return asyncio.run(replay(args.command_id, args.fix))
+    return asyncio.run(replay(args.command_id, args.fix, args.discard))
 
 
 if __name__ == "__main__":

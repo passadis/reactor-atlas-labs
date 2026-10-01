@@ -74,6 +74,10 @@ services:
         run: bash ../../scripts/vendor_atlas_common.sh functions/ops_mcp
 
 hooks:
+  # Before any service is built: the git commit, for service.version / atlas.agent_version.
+  prepackage:
+    shell: sh
+    run: bash ./scripts/stamp_version.sh
   postprovision:
     shell: sh
     run: ./scripts/postprovision.sh

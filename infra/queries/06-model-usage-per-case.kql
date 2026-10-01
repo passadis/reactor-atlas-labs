@@ -1,0 +1,9 @@
+// Section 3 - Tokens per case (atlas.case_id is stamped on every span by the telemetry enricher).
+dependencies
+| where name startswith "chat " and isnotempty(customDimensions["atlas.case_id"])
+| summarize tokens = sum(toint(customDimensions["gen_ai.usage.input_tokens"])
+                         + toint(customDimensions["gen_ai.usage.output_tokens"])),
+            model_calls = count(), first_seen = min(timestamp)
+    by case_id = tostring(customDimensions["atlas.case_id"])
+| order by first_seen desc
+| take 25

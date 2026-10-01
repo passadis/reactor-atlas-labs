@@ -26,7 +26,7 @@ from atlas_common.auth import get_async_credential
 from atlas_common.config import DEFAULT_OPS_NOW
 from atlas_common.remediation import child_traceparent
 from atlas_common.repositories import CosmosStore
-from atlas_common.telemetry import configure_telemetry
+from atlas_common.telemetry import bound, configure_telemetry
 from opentelemetry import trace
 from opentelemetry.propagate import extract
 from opsapi import core
@@ -200,7 +200,8 @@ async def create_ticket(req: func.HttpRequest) -> func.HttpResponse:
     if not isinstance(body, dict):
         return respond(core.error(400, "invalid_request", "the body must be a JSON object", cid))
     key = req.headers.get("Idempotency-Key")
-    return respond(await guard(cid, lambda: core.create_ticket(deps(), body, key, cid)))
+    with bound(case_id=body.get("case_id"), node="ops-api"):
+        return respond(await guard(cid, lambda: core.create_ticket(deps(), body, key, cid)))
 
 
 @app.route(route="tickets/{ticket_id}", methods=["GET"])
@@ -218,8 +219,9 @@ async def submit_remediation(req: func.HttpRequest) -> func.HttpResponse:
         return respond(core.error(400, "invalid_request", "the body must be a JSON object", cid))
     key = req.headers.get("Idempotency-Key")
     who = caller(req)
-    return respond(await guard(
-        cid, lambda: core.submit_remediation(deps(), body, key, cid, caller=who)))
+    with bound(case_id=body.get("case_id"), plan_id=body.get("plan_id"), node="ops-api"):
+        return respond(await guard(
+            cid, lambda: core.submit_remediation(deps(), body, key, cid, caller=who)))
 
 
 @app.route(route="remediation/operations/{operation_id}", methods=["GET"])

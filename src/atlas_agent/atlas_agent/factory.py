@@ -32,6 +32,7 @@ from atlas_common.config import Settings
 from atlas_common.ops_client import OpsApiClient
 from atlas_common.repositories import CosmosStore, KnowledgeSearch
 from atlas_common.secrets import read_secret
+from atlas_common.telemetry import event
 from atlas_common.tool_catalog import ToolCatalog
 from azure.core.credentials_async import AsyncTokenCredential
 from openai import APIStatusError
@@ -139,10 +140,12 @@ def model_failure_reason(exc: BaseException) -> FailureReason | None:
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         if isinstance(current, (AgentContentFilterException, ChatClientContentFilterException)):
+            event("guardrail.block", source="framework", kind=type(current).__name__)
             return "content_filtered"
         if isinstance(current, APIStatusError):
             body = current.body if isinstance(current.body, dict) else {}
             if current.code == "content_filter" or body.get("code") == "content_filter":
+                event("guardrail.block", source="model", kind="content_filter")
                 return "content_filtered"
             if current.status_code == 429:
                 return "throttled"

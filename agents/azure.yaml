@@ -56,6 +56,9 @@ services:
       ATLAS_APIM_KEY_SECRET_URI: ${ATLAS_APIM_KEY_SECRET_URI}
       ATLAS_TOOL_CATALOG_URL: ${ATLAS_TOOL_CATALOG_URL}
       ATLAS_REASONING_EFFORT: none
+      # Phase 11: record prompts and completions in the demo env (atlas_common.telemetry warns loudly).
+      ATLAS_CAPTURE_CONTENT: "true"
+      OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: "true"
     # Content-safety guardrail by full ARM id (a bare name fails open; API-NOTES 10.2). A `$ref`
     # rather than ${ATLAS_RAI_POLICY_ID}: this extension version passes ${...} inside `policies`
     # through verbatim (API-NOTES 12). scripts/package_hosted_agent.py writes the file.

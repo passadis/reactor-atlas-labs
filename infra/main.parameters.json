@@ -20,6 +20,7 @@
     "embedModelVersion": { "value": "${ATLAS_EMBED_VERSION=1}" },
     "embedCapacity": { "value": "${ATLAS_EMBED_CAPACITY=120}" },
     "enableSemanticCache": { "value": "${ATLAS_ENABLE_SEMANTIC_CACHE=false}" },
+    "captureContent": { "value": "${ATLAS_CAPTURE_CONTENT=true}" },
     "webAppClientId": { "value": "${ATLAS_WEB_APP_CLIENT_ID=}" },
     "gatewayAppClientId": {
       "value": "${ATLAS_GATEWAY_APP_CLIENT_ID=}"

@@ -1,0 +1,8 @@
+// Section 7 - Safety: guardrail blocks and injection canaries reaching an agent's context.
+// Each is a deterministic event, not a model's opinion of itself.
+traces
+| where customDimensions["atlas.event"] in ("guardrail.block", "injection.canary_retrieved")
+| project timestamp, event = tostring(customDimensions["atlas.event"]),
+          case_id = tostring(customDimensions["atlas.case_id"]),
+          node = tostring(customDimensions["atlas.node"]), message, operation_Id
+| order by timestamp desc

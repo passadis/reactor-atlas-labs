@@ -1,0 +1,6 @@
+// Alert: case analysis p95 above 120 s (window 10 min). The pack says 45 s; measured p95 for the
+// canonical case is about 83 s, all of it model time (2026-10-01), so 45 s would fire permanently.
+dependencies
+| where name == "workflow.run"
+| summarize p95_s = percentile(duration, 95) / 1000, runs = count()
+| where runs >= 2 and p95_s > 120

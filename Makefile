@@ -200,8 +200,9 @@ redteam: ## Run the AI Red Teaming scan (Phase 12; eastus2/northcentralus only)
 
 # ---------------------------------------------------------------- Phase 11 --
 .PHONY: trace-check
-trace-check: ## Assert one trace spans all six hops for CASE=<case_id> (Phase 11)
-	$(call PENDING,Phase 11 - observability)
+trace-check: ## Print one case's waterfall and assert it spans every hop: make trace-check CASE=<case_id>
+	@test -n "$(CASE)" || { echo "usage: make trace-check CASE=<case_id>"; exit 2; }
+	uv run python -m scripts.trace_check $(CASE) $(if $(FULL),--full,)
 
 # ---------------------------------------------------------------- Phase 14 --
 .PHONY: mcp-probe
@@ -259,6 +260,10 @@ inject-failing-plan: ## Stage the RB-0099 plan that retries and dead-letters (th
 .PHONY: verify-phase10
 verify-phase10: ## Verify approvals, async remediation, DLQ/replay, timeout and the one trace
 	bash scripts/verify_phase10.sh
+
+.PHONY: verify-phase11
+verify-phase11: ## Verify the one trace, workbook sections, alerts firing, content capture, availability
+	bash scripts/verify_phase11.sh
 
 .PHONY: verify-all
 verify-all: ## Run every scripts/verify_phase*.sh plus smoke and security (Phase 14)

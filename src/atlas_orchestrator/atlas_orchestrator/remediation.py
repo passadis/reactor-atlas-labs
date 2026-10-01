@@ -37,6 +37,7 @@ from atlas_common.remediation import (
     ProgressEvent,
     service_bus_namespace,
 )
+from atlas_common.telemetry import event
 
 from atlas_common import approval_tokens
 
@@ -103,6 +104,8 @@ class Dispatcher:
                   "ticket_id": ticket.get("ticket_id")}
         await self._cases.save(case)
         await self._cases.set_fields(case.case_id, {"remediation": record})
+        event("remediation.dispatched", case_id=case.case_id, plan_id=case.plan.plan_id,
+              operation_id=record["operation_id"], ticket_id=record["ticket_id"])
         log.info("case %s dispatched as %s (ticket %s)", case.case_id,
                  record["operation_id"], record["ticket_id"])
         return record
@@ -243,8 +246,12 @@ class RemediationListener:
                     async with receiver:
                         backoff = 1.0
                         while True:
-                            for message in await receiver.receive_messages(
-                                    max_message_count=20, max_wait_time=10):
+                            # The iterator, not receive_messages(): the SDK opens a
+                            # ServiceBus.receive span per receive_messages() call even when it
+                            # returns nothing (about 8,700 empty spans in 6 h, API-NOTES 18), but
+                            # only per real message when iterating. It ends after max_wait_time
+                            # idle, and the outer loop simply iterates again.
+                            async for message in receiver:
                                 try:
                                     payload = json.loads(str(message))
                                     if kind == "results":
@@ -308,6 +315,9 @@ class RemediationListener:
             # replay after the fix can still complete it (scripts/dlq_replay.py).
             record["status"] = "dead_lettered"
             case.decide("worker", "remediation-dead-lettered", result.detail)
+        event("remediation.outcome", case_id=result.case_id, plan_id=result.plan_id,
+              operation_id=result.operation_id, status=record["status"],
+              deliveries=result.delivery_count, steps=len(result.steps))
         await self._cases.save(case)
         # Last, unconditional, whole record: the result is the authority on how it ended.
         await self._cases.patch_remediation(result.case_id, record, only_if_open=False)

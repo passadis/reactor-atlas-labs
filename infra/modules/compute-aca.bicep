@@ -108,6 +108,9 @@ param logicPrincipalId string = ''
 @description('Hostname of the Logic App: the only host a registered approval callback may point at.')
 param logicHost string = ''
 
+@description('Record prompts and completions in traces (atlas_common.telemetry).')
+param captureContent bool = false
+
 var commonEnv = [
   { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }
   { name: 'ATLAS_COSMOS_ENDPOINT', value: cosmosEndpoint }
@@ -118,6 +121,7 @@ var commonEnv = [
   { name: 'FOUNDRY_MODEL_DEPLOYMENT', value: foundryModelDeployment }
   { name: 'ATLAS_SERVICEBUS_FQDN', value: serviceBusFqdn }
   { name: 'OTEL_SERVICE_NAMESPACE', value: 'atlas' }
+  { name: 'ATLAS_CAPTURE_CONTENT', value: string(captureContent) }
   { name: 'ATLAS_FOUNDRY_ACCOUNT_NAME', value: foundryAccountName }
   { name: 'AZURE_ENV_NAME', value: azdEnvironmentName }
   // THE switch (PHASE-08 section C): set, and the agent tools call the operations API over HTTP.

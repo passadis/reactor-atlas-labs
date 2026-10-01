@@ -1,0 +1,5 @@
+// Alert: more than 2 approvals expired unanswered (window 30 min).
+traces
+| where customDimensions["atlas.event"] == "approval.expired"
+| summarize expired = count()
+| where expired > 2

@@ -907,3 +907,66 @@ Putting a message on the queue with send rights is not enough; we show it being 
 
 **Dead-lettered is not failed.** The case waits for a human; after the fix, the replay finishes it
 without re-running what already happened.
+
+## Phase 11 - Observability: one trace, one screen, real alerts (Episode 4)
+
+### What was built
+
+Phase 03 already propagated `traceparent` on every hop. Phase 11 makes it something you can stand
+in front of:
+
+| Piece | What it is |
+|---|---|
+| Span enricher | `atlas.case_id`, `atlas.node`, `atlas.plan_id`, `atlas.agent_version` (the git commit, `-dirty` for rehearsal builds) stamped on EVERY span started inside a case - Cosmos, HTTP, Service Bus included - from one context variable, not sprinkled through business code. |
+| Business events | `policy.decision`, `approval.answered` / `.expired`, `remediation.dispatched` / `.outcome`, `tool.failure`, `guardrail.block`, `injection.canary_retrieved` - App Insights `traces` rows the workbook and alerts query. |
+| `make trace-check CASE=...` | The case's whole trace as a text waterfall, asserting web, orchestrator, agent nodes, APIM, the ops-api Function, Service Bus and the worker under one `operation_Id`, and `atlas.case_id` on every ATLAS span. |
+| Workbook `ATLAS Agent Operations` | Seven sections, twelve queries, all in `infra/queries/*.kql`. |
+| Alerts (9) on `ag-atlas-ops` | Tool error rate, case-analysis p95, model 429s, token burn, DLQ depth (metric), approval timeouts, injection canary, eval regression, web availability. |
+| Availability test | Standard test on `/api/health` from East US, West US and West Europe every 5 minutes. |
+| Content capture | ON in the demo env (`ATLAS_CAPTURE_CONTENT=true`): chat spans carry the prompt and completion. Every process logs `CONTENT CAPTURE IS ON` at startup. The data is synthetic. |
+
+### What to show
+
+1. `make trace-check CASE=<a case you just ran>` - the waterfall in the terminal. Point at the
+   moments: triage's tool calls fanning out through APIM, the knowledge/impact branches running in
+   parallel, the dispatch, the ops-api Function enqueuing, the worker steps. Then the last lines:
+   seven hops PASS, `atlas.case_id` on every ATLAS span.
+2. Application Insights, Transaction search, the same `operation_Id`: the portal version of it.
+   Open one `chat gpt-main` span and read the prompt the agent actually saw (content capture).
+3. The workbook. Section 1 latency per node (the model is the long pole), Section 3 tokens per
+   agent (knowledge agent costs most), Section 4 what the gate decided, Section 7 the canary.
+4. Alerts: the DLQ alert history - fired by a dead-lettered command, resolved after the replay.
+5. The seam (API-NOTES 18.5): which spans come from Foundry (`agentsv2`, `responsesapi`) and which
+   from our code. Say it plainly.
+
+### Measured (deployed, eastus2, 2026-10-01)
+
+| Thing | Value |
+|---|---|
+| Spans in one canonical case trace | 319-332 (108-116 infrastructure spans hidden by default) |
+| ATLAS spans carrying `atlas.case_id` | 233/233, 234/234, 242/242 on three cases |
+| Telemetry ingestion lag | 1-3 minutes - run the case BEFORE the beat, not during it |
+| `atlas.case` root span on the cold path | 353 s for a 90 s case (the first replica keeps waiting; API-NOTES 18.8) - chart `workflow.run` |
+| Dead-lettered command to the DLQ alert firing | 313 s (metric latency plus the 1-minute evaluation) |
+| Availability | green from all three regions |
+
+### Commands
+
+```bash
+make trace-check CASE=CASE-XXXXXXXX          # waterfall plus hop assertions
+make trace-check CASE=CASE-XXXXXXXX FULL=1   # include Cosmos, token and storage spans
+uv run python -m scripts.dlq_replay --command-id OP-XXXX --discard   # drop an unfixable dead letter
+make verify-phase11                           # about 15 minutes: case, workbook, alert firing
+```
+
+Workbook: Azure portal, resource group `rg-atlas-atlas`, Workbooks, `ATLAS Agent Operations`
+(`azd env get-value ATLAS_WORKBOOK_ID` gives its id).
+
+### Fallback
+
+- Ingestion is late: show a trace from the T-10 rehearsal case instead (keep its case id in the
+  run sheet) - `trace-check` works on any case from the last 7 days.
+- App Insights query API down: the portal's Transaction search and the workbook are separate
+  front ends; one usually works when the other does not.
+- The DLQ alert cannot be fired live in a 5-minute beat (313 s measured). Show the alert history
+  from the rehearsal run.

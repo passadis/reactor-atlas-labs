@@ -22,7 +22,7 @@ from agent_framework import CheckpointStorage, Workflow
 from atlas_agent.factory import IncidentAgentRuntime
 from atlas_common.models import Entitlement, Service
 from atlas_common.repositories.cosmos_repos import EntitlementRepository, ServiceRepository
-from atlas_common.telemetry import continued_from, current_traceparent, span
+from atlas_common.telemetry import bound, continued_from, current_traceparent, span
 from pydantic import BaseModel
 
 from .agents import FRONT_DESK, IMPACT, KNOWLEDGE, PLANNER, TRIAGE, SpecialistFactory
@@ -210,7 +210,12 @@ class CaseRunner:
                 # resume dispatched under the approval request's trace, and the remediation hung
                 # off a different waterfall from the incident (API-NOTES 17.8).
                 carrier = {"traceparent": case.traceparent} if case.traceparent else None
-                with continued_from(carrier), span("atlas.dispatch", case_id=case.case_id):
+                with (
+                    continued_from(carrier),
+                    bound(case_id=case.case_id,
+                          plan_id=case.plan.plan_id if case.plan else None, node="dispatch"),
+                    span("atlas.dispatch", case_id=case.case_id),
+                ):
                     record = await self.dispatcher.dispatch(case)
             except Exception as exc:
                 log.exception("dispatch of %s failed", case.case_id)
@@ -354,7 +359,10 @@ class CaseRunner:
     async def _execute(self, run: Run, request: IntakeRequest) -> None:
         mode = normalise_mode(request.mode)
         with continued_from({"traceparent": request.traceparent} if request.traceparent else None):
-            with span("atlas.case", case_id=run.case_id, mode=mode) as case_span:
+            with (
+                bound(case_id=run.case_id, mode=mode),
+                span("atlas.case", case_id=run.case_id, mode=mode) as case_span,
+            ):
                 run.publish(self._event(run, "started", data={
                     "mode": mode, "report": request.report,
                     "traceparent": current_traceparent(),
@@ -637,7 +645,10 @@ class CaseRunner:
         run.request_id = run.request_id or ApprovalExecutor.request_id_for(case_id)
         workflow = self.workflow(resolved)
         started = time.perf_counter()
-        with span("atlas.resume", case_id=case_id, checkpoint_id=target):
+        with (
+            bound(case_id=case_id),
+            span("atlas.resume", case_id=case_id, checkpoint_id=target),
+        ):
             responses = {run.request_id: response} if response is not None else None
             suspended = await self._pump(
                 run, workflow.run(checkpoint_id=target, responses=responses, stream=True))

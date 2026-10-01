@@ -28,6 +28,7 @@ from typing import Any
 
 from agent_framework import Executor, WorkflowContext, handler, response_handler
 from atlas_common.models import Entitlement, Service
+from atlas_common.telemetry import event
 from pydantic import BaseModel, ConfigDict, Field
 
 from .executors import NodeProgress
@@ -150,6 +151,10 @@ class PolicyGateExecutor(Executor):
             await ctx.yield_output(case)
             await ctx.send_message(case)
             return
+        event("policy.decision", case_id=case.case_id, plan_id=decision.plan_id,
+              decision=("blocked" if decision.blocked else "auto_approved"
+                        if decision.auto_approved else "approval_required"),
+              roles=",".join(decision.required_approver_roles))
         if decision.blocked:
             case.transition("rejected", by=self.id, rule="policy-blocked",
                             detail=decision.summary)
@@ -267,6 +272,9 @@ class ApprovalExecutor(Executor):
                                    request_id=request_id)
             return
 
+        event("approval.answered", case_id=case.case_id, plan_id=original_request.plan_id,
+              approved=response.approved, role=response.role,
+              latency_s=round((response.at - decision.evaluated_at).total_seconds(), 1))
         if response.approved:
             case.transition("approved", by=self.id, rule="human-approved",
                             detail=f"{response.by} ({response.role}): {response.comment}")
@@ -300,6 +308,7 @@ class ApprovalExecutor(Executor):
         case.approval = ApprovalRecord(
             approved=False, by=response.by, role=response.role, comment=response.comment,
             at=response.at, plan_id=original_request.plan_id, accepted=True)
+        event("approval.expired", case_id=case.case_id, plan_id=original_request.plan_id)
         case.transition("rejected", by=self.id, rule="approval-expired",
                         detail=f"no approver answered before {decision.expires_at.isoformat()}; "
                                f"nothing was dispatched")

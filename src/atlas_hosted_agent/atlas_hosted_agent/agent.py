@@ -110,6 +110,10 @@ def build_server(credential: AsyncTokenCredential | None = None) -> Any:
     # The agent server exports to the project's Application Insights on its own (it reads the
     # platform-injected connection string). Only Agent Framework's GenAI spans need switching on.
     enable_instrumentation(enable_sensitive_data=capture_content())
+    if capture_content():
+        logging.getLogger("atlas.telemetry").warning(
+            "CONTENT CAPTURE IS ON (ATLAS_CAPTURE_CONTENT=true): prompts and completions are "
+            "recorded in traces")
     # The platform-managed agent identity is not a user-assigned identity we name, so this is the
     # documented DefaultAzureCredential path for hosted agents, not atlas_common.auth.
     # See docs/API-NOTES.md 12.

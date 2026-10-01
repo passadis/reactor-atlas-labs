@@ -27,7 +27,7 @@ from typing import Any
 from agent_framework import Agent, Executor, WorkflowContext, handler
 from atlas_agent.factory import model_failure_reason, retry_after_seconds
 from atlas_common.models import Severity
-from atlas_common.telemetry import span
+from atlas_common.telemetry import bound, span
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .agents import IMPACT, KNOWLEDGE, PLANNER, TRIAGE
@@ -128,7 +128,11 @@ class AgentNode(Executor):
         """
         started = time.perf_counter()
         options: Any = {"response_format": self._output_model}
-        with span(f"atlas.node.{self.id}", node=self.id, dimension=self._dimension) as node_span:
+        # bound(): the model and tool spans the framework starts inside carry atlas.node too.
+        with (
+            bound(node=self.id),
+            span(f"atlas.node.{self.id}", node=self.id, dimension=self._dimension) as node_span,
+        ):
             value, reason, detail, calls, seconds = await self._attempts(
                 prompt, options, started, validate)
             node_span.set_attribute("atlas.node.ok", value is not None)

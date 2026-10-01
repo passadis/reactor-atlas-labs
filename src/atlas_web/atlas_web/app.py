@@ -52,7 +52,13 @@ from atlas_common.auth import SCOPE_FOUNDRY
 from atlas_common.config import Settings, load_local_env
 from atlas_common.entitlements import can_approve, can_chat
 from atlas_common.repositories import EntitlementRepository, RepositoryUnavailableError
-from atlas_common.telemetry import configure_telemetry, current_traceparent, span, trace_id
+from atlas_common.telemetry import (
+    bound,
+    configure_telemetry,
+    current_traceparent,
+    span,
+    trace_id,
+)
 from atlas_common.tool_catalog import call_mcp_tool, list_mcp_tools
 from azure.ai.projects.aio import AIProjectClient
 from azure.identity.aio import get_bearer_token_provider
@@ -338,7 +344,7 @@ def _routes(app: FastAPI) -> None:
             started = time.perf_counter()
             summary: dict[str, Any] = {"mode": turn["mode"]}
             first_event_ms: int | None = None
-            with span(
+            with bound(session_id=turn["session_id"], node="chat"), span(
                 "atlas.chat.turn",
                 turn_id=turn_id,
                 session_id=turn["session_id"],
@@ -448,6 +454,11 @@ def _routes(app: FastAPI) -> None:
         state = atlas(request)
 
         async def events() -> AsyncIterator[ServerSentEvent]:
+            with bound(case_id=case_id, node="web"):
+                async for item in _relay():
+                    yield item
+
+        async def _relay() -> AsyncIterator[ServerSentEvent]:
             try:
                 async with state.orchestrator.stream(
                     "GET", f"/cases/{case_id}/stream",

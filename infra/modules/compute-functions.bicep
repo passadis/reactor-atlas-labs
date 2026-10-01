@@ -80,6 +80,9 @@ var mcpAppName = '${abbrs.webSitesFunctions}-atlas-mcp-${resourceToken}'
 
 // Shared by both apps. Identity-based storage uses the __accountName / __credential / __clientId
 // triple rather than a connection string.
+@description('Record prompts and completions in traces (atlas_common.telemetry).')
+param captureContent bool = false
+
 var commonAppSettings = [
   { name: 'AzureWebJobsStorage__accountName', value: storageAccountName }
   { name: 'AzureWebJobsStorage__credential', value: 'managedidentity' }
@@ -93,6 +96,7 @@ var commonAppSettings = [
   { name: 'ATLAS_SERVICEBUS_FQDN', value: serviceBusFqdn }
   { name: 'ATLAS_COMMANDS_QUEUE', value: commandsQueueName }
   { name: 'OTEL_SERVICE_NAMESPACE', value: 'atlas' }
+  { name: 'ATLAS_CAPTURE_CONTENT', value: string(captureContent) }
   { name: 'FOUNDRY_PROJECT_ENDPOINT', value: foundryProjectEndpoint }
   { name: 'ATLAS_FOUNDRY_ACCOUNT_NAME', value: foundryAccountName }
   { name: 'ATLAS_MODEL_EMBED', value: embedDeploymentName }

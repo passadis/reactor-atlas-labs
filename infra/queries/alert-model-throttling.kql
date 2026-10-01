@@ -1,0 +1,6 @@
+// Alert: more than 20 model 429s (window 5 min), direct calls or through the /models API.
+union
+    (dependencies | where resultCode == "429" and name startswith "chat "),
+    (requests | where resultCode == "429" and url has "/models/")
+| summarize throttled = count()
+| where throttled > 20

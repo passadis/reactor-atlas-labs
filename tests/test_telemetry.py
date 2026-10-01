@@ -55,3 +55,30 @@ def test_an_inbound_traceparent_parents_the_next_hop() -> None:
     with continued_from(inbound), span("consumer"):
         assert trace_id() == producer_trace
     assert trace_id() is None
+
+
+def test_bound_attributes_are_stamped_on_every_span_started_inside() -> None:
+    """Phase 11 span taxonomy: bind once, every span (the framework's too) carries it."""
+    from atlas_common.telemetry import _span_enricher, bound
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(_span_enricher())
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = provider.get_tracer("test")
+
+    with bound(case_id="CASE-T1"), tracer.start_as_current_span("outer"):
+        with bound(node="triage_agent"), tracer.start_as_current_span("inner"):
+            pass
+    with tracer.start_as_current_span("unbound"):
+        pass
+
+    spans = {s.name: dict(s.attributes or {}) for s in exporter.get_finished_spans()}
+    assert spans["outer"]["atlas.case_id"] == "CASE-T1" and "atlas.node" not in spans["outer"]
+    assert spans["inner"]["atlas.case_id"] == "CASE-T1"
+    assert spans["inner"]["atlas.node"] == "triage_agent"
+    assert "atlas.case_id" not in spans["unbound"]
+    assert "atlas.agent_version" in spans["unbound"]

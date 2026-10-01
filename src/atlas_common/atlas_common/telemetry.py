@@ -10,8 +10,13 @@ connection string still runs, still propagates `traceparent`, and says once that
 exporting.
 
 Prompt and completion capture is OFF unless `ATLAS_CAPTURE_CONTENT=true`. Traces then carry token
-counts, tool names, durations and errors, but not what the user typed. Phase 12 trace evaluation
-turns it on for the evaluation run only.
+counts, tool names, durations and errors, but not what the user typed. The DEMO environment turns
+it on (Phase 11) so a trace can answer "why did the agent do that?" - and every process says so,
+loudly, at startup. Synthetic data only; never in production.
+
+Span taxonomy (Phase 11): business code binds `atlas.*` attributes once with `bound(case_id=...)`;
+`SpanEnricher` stamps them onto every span started inside, including the framework's own `gen_ai`
+spans. Nobody hand-sets `atlas.case_id` on individual spans.
 
 Ingestion auth: in Azure, the exporter authenticates with the process's managed identity (each
 compute identity holds Monitoring Metrics Publisher on the component). Locally it uses the
@@ -21,10 +26,12 @@ documented exception in CLAUDE.md section 1.
 
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 from collections.abc import Iterator, Mapping, MutableMapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from opentelemetry import context as otel_context
@@ -52,9 +59,72 @@ _QUIET_LOGGERS = (
 
 _state: dict[str, Any] = {"configured": False, "exporting": False}
 
+# The ATLAS attributes in force for the current task, copied onto every span started inside it.
+# Immutable default (None), so no task can mutate a shared dict by accident.
+_bound: ContextVar[dict[str, str] | None] = ContextVar("atlas_span_attributes", default=None)
+
+
+@contextmanager
+def bound(**attributes: Any) -> Iterator[None]:
+    """Bind `atlas.<name>` attributes to every span started inside this block (and its tasks).
+
+    Values are strings; None is ignored. Nested blocks add to, and may override, the outer ones.
+    """
+    merged = {**(_bound.get() or {}),
+              **{k: str(v) for k, v in attributes.items() if v is not None}}
+    token = _bound.set(merged)
+    try:
+        yield
+    finally:
+        _bound.reset(token)
+
+
+def bound_attributes() -> dict[str, str]:
+    return dict(_bound.get() or {})
+
+
+def _span_enricher() -> Any:
+    from opentelemetry.sdk.trace import SpanProcessor
+
+    class SpanEnricher(SpanProcessor):
+        """Stamp the bound `atlas.*` attributes - and the version - onto every span at start."""
+
+        def __init__(self) -> None:
+            self._version = build_version()
+
+        def on_start(self, span: Any, parent_context: Any = None) -> None:
+            span.set_attribute("atlas.agent_version", self._version)
+            for key, value in (_bound.get() or {}).items():
+                span.set_attribute(f"atlas.{key}", value)
+
+        def on_end(self, span: Any) -> None:
+            return None
+
+        def shutdown(self) -> None:
+            return None
+
+        def force_flush(self, timeout_millis: int = 30000) -> bool:
+            return True
+
+    return SpanEnricher()
+
 
 def capture_content() -> bool:
     return os.environ.get("ATLAS_CAPTURE_CONTENT", "").strip().lower() in ("1", "true", "yes")
+
+
+def build_version() -> str:
+    """The git commit this build came from: ATLAS_VERSION, else the stamped file, else "dev"."""
+    explicit = os.environ.get("ATLAS_VERSION", "").strip()
+    if explicit:
+        return explicit
+    # Imported by name: the file exists only after packaging (it is gitignored), and a static
+    # import would fail type-checking on a fresh clone.
+    try:
+        stamped = importlib.import_module("atlas_common._version")
+    except ImportError:
+        return "dev"
+    return str(getattr(stamped, "VERSION", "dev"))
 
 
 def _resource(service_name: str, service_version: str | None) -> Any:
@@ -65,7 +135,7 @@ def _resource(service_name: str, service_version: str | None) -> Any:
     unconditionally made the worker's whole exporter setup fail on ModuleNotFoundError - its spans
     silently never reached App Insights and the trace stopped at the Service Bus hop.
     """
-    version = service_version or os.environ.get("ATLAS_VERSION", "dev")
+    version = service_version or build_version()
     attributes = {"service.namespace": SERVICE_NAMESPACE,
                   "deployment.environment": os.environ.get("AZURE_ENV_NAME", "local")}
     try:
@@ -118,14 +188,28 @@ def configure_telemetry(service_name: str, *, service_version: str | None = None
                 "resource": resource,
                 # Only ATLAS's own loggers become App Insights traces; library logs stay local.
                 "logger_name": "atlas",
+                "span_processors": [_span_enricher()],
             }
             if credential_kind() == "managed":
                 options["credential"] = get_credential()
+            # The distro (1.8.x) defaults to a rate-limited sampler at 5 traces/s. ATLAS's volume is
+            # a demo's, and the whole point of Episode 4 is a complete waterfall, so keep every
+            # trace unless the environment says otherwise (API-NOTES 18).
+            os.environ.setdefault("OTEL_TRACES_SAMPLER", "always_on")
             configure_azure_monitor(**options)
             _state["exporting"] = True
         except Exception as exc:  # telemetry must never take the process down
             _log.warning("Azure Monitor export disabled: %s", type(exc).__name__)
 
+    if capture_content():
+        # Said out loud at every start, on purpose: an audience should hear this is a choice.
+        _log.warning("CONTENT CAPTURE IS ON (ATLAS_CAPTURE_CONTENT=true): prompts, completions, "
+                     "tool arguments and results are recorded in traces for %s. Demo environment, "
+                     "synthetic data only - never enable this in production.", service_name)
+        # The same switch for the instrumentations that read their own variable: Foundry's
+        # hosting libraries and the GenAI semantic-convention instrumentations.
+        os.environ.setdefault("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "true")
+        os.environ.setdefault("ENABLE_SENSITIVE_DATA", "true")
     try:
         from agent_framework.observability import enable_instrumentation
     except ImportError:
@@ -135,6 +219,23 @@ def configure_telemetry(service_name: str, *, service_version: str | None = None
     except Exception as exc:
         _log.warning("Agent Framework instrumentation disabled: %s", type(exc).__name__)
     return bool(_state["exporting"])
+
+
+_events = logging.getLogger("atlas.events")
+
+
+def event(name: str, **attributes: Any) -> None:
+    """One structured business event: an App Insights `traces` row the workbook can query.
+
+    `atlas.event` names it; every other field becomes `atlas.<name>` in customDimensions, along with
+    whatever `bound()` attributes are in force (the case id, mostly). It carries the current trace
+    id, so the event sits inside the case's waterfall.
+    """
+    extra: dict[str, Any] = {"atlas.event": name,
+                             **{f"atlas.{k}": v for k, v in bound_attributes().items()}}
+    extra.update({f"atlas.{k}": (v if isinstance(v, (int, float, bool)) else str(v))
+                  for k, v in attributes.items() if v is not None})
+    _events.info(name, extra=extra)
 
 
 def tracer(name: str = "atlas") -> trace.Tracer:

@@ -1,0 +1,7 @@
+// Section 5 - Worker deliveries: how many attempts each operation took, and how it settled.
+dependencies
+| where name == "atlas.worker.remediation"
+| extend delivery = toint(customDimensions["atlas.delivery"]),
+         settle = tostring(customDimensions["atlas.outcome"])
+| summarize deliveries = count(), max_delivery = max(delivery), p95_s = round(percentile(duration, 95) / 1000, 1)
+    by settle

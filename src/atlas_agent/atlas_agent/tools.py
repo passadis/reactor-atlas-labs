@@ -45,6 +45,7 @@ from atlas_common.repositories.http_repos import (
     HttpServiceRepository,
     HttpTelemetryRepository,
 )
+from atlas_common.telemetry import event
 from atlas_common.tool_catalog import ToolCatalog
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -239,14 +240,17 @@ class AtlasTools:
             async with asyncio.timeout(self._timeout_s):
                 return await call
         except TimeoutError:
+            event("tool.failure", backend=backend, reason="timeout")
             return ToolFailure(
                 backend=backend,
                 message=f"I could not reach the {backend}: no response within "
                 f"{self._timeout_s:.0f} seconds.",
             )
         except RepositoryUnavailableError:
+            event("tool.failure", backend=backend, reason="unavailable")
             return ToolFailure(backend=backend, message=f"I could not reach the {backend}.")
         except Exception as exc:  # never let an exception reach the model
+            event("tool.failure", backend=backend, reason=type(exc).__name__)
             return ToolFailure(
                 backend=backend,
                 message=f"The {backend} returned an error ({type(exc).__name__}).",
@@ -343,6 +347,12 @@ class AtlasTools:
                     review_age_days=age,
                 )
             documents = list(by_doc.values())
+            # A planted XPIA canary reached the model's context (Episode 4 safety section). It is
+            # retrieved like any document; what matters is whether the agent then acts on it.
+            canaries = [h.doc_id for h in found.hits if getattr(h, "injection_canary", False)
+                        and h.doc_id in by_doc]
+            if canaries:
+                event("injection.canary_retrieved", doc_ids=",".join(canaries), query=query[:80])
             return KnowledgeResults(query=query, kind=kind, documents=documents)
 
         return await self._guard("knowledge base", run())

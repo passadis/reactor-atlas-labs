@@ -1,0 +1,7 @@
+// Alert: more than 2,000,000 model tokens in an hour (window 1 h) - a demo-scale ceiling, roughly
+// 25 times the busiest rehearsal hour.
+dependencies
+| where name startswith "chat "
+| summarize tokens = sum(toint(customDimensions["gen_ai.usage.input_tokens"])
+                         + toint(customDimensions["gen_ai.usage.output_tokens"]))
+| where tokens > 2000000

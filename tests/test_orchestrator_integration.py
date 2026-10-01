@@ -264,8 +264,13 @@ async def test_an_approval_that_lands_while_the_service_is_down_is_swept_up() ->
         settled = await second.get(case_id)
         await second.close()
 
-    assert any(row.get("case_id") == case_id for row in swept), swept
-    assert (settled or {}).get("status") == "approved"
+    # The deployed orchestrator replicas run the same sweep against the same Cosmos, so either this
+    # runner or a live replica picks the case up first (seen once, under verifier load). The
+    # property under test is that the answer is not lost - not which process found it.
+    status = (settled or {}).get("status")
+    assert any(row.get("case_id") == case_id for row in swept) or status != "awaiting_approval", (
+        swept, status)
+    assert status in ("approved", "executing", "completed"), status
 
 
 async def test_tool_level_approval_holds_a_destructive_call() -> None:

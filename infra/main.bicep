@@ -80,6 +80,9 @@ param embedCapacity int = 120
 @description('Deploy the optional Azure Managed Redis used for APIM semantic caching. Adds roughly 25 minutes to provisioning.')
 param enableSemanticCache bool = false
 
+@description('Record prompts and completions in traces (Phase 11). On in the demo env so Episode 4 can open a span and read what the agent saw; every process logs a loud warning at startup when it is on. The seeded data is synthetic.')
+param captureContent bool = true
+
 @description('Entra agent identity of the Foundry hosted agent; empty until its first deploy.')
 param hostedAgentPrincipalId string = ''
 
@@ -214,6 +217,7 @@ module computeAca './modules/compute-aca.bicep' = {
   name: 'compute-aca'
   scope: rg
   params: {
+    captureContent: captureContent
     location: location
     tags: tags
     resourceToken: resourceToken
@@ -261,6 +265,7 @@ module computeFunctions './modules/compute-functions.bicep' = {
   name: 'compute-functions'
   scope: rg
   params: {
+    captureContent: captureContent
     location: location
     tags: tags
     resourceToken: resourceToken
@@ -388,6 +393,23 @@ module rbac './modules/rbac.bicep' = {
   }
 }
 
+// Phase 11: the ATLAS Agent Operations workbook, alert rules and the availability test. The KQL
+// lives in infra/queries/.
+module monitoring './modules/monitoring.bicep' = {
+  name: 'monitoring'
+  scope: rg
+  params: {
+    location: location
+    tags: tags
+    resourceToken: resourceToken
+    appInsightsId: observability.outputs.appInsightsId
+    actionGroupId: observability.outputs.actionGroupId
+    serviceBusNamespaceId: messaging.outputs.namespaceId
+    commandsQueueName: messaging.outputs.commandsQueueName
+    webUrl: computeAca.outputs.webAppUrl
+  }
+}
+
 // ---------------------------------------------------------------------------- outputs --
 
 output AZURE_LOCATION string = location
@@ -414,6 +436,7 @@ output ATLAS_LOGIC_IDENTITY_CLIENT_ID string = identity.outputs.logicClientId
 output ATLAS_LOG_ANALYTICS_ID string = observability.outputs.logAnalyticsId
 output ATLAS_APPINSIGHTS_NAME string = observability.outputs.appInsightsName
 output ATLAS_APPINSIGHTS_ID string = observability.outputs.appInsightsId
+output ATLAS_WORKBOOK_ID string = monitoring.outputs.workbookId
 // Not a secret in the CLAUDE.md sense, but never printed on stage. See docs/API-NOTES.md.
 output APPLICATIONINSIGHTS_CONNECTION_STRING string = observability.outputs.appInsightsConnectionString
 
@@ -478,4 +501,5 @@ output ATLAS_APIM_PRODUCT string = apim.outputs.agentToolsProductName
 output ATLAS_LOGICAPP_NAME string = logicapps.outputs.logicAppName
 output ATLAS_LOGICAPP_URL string = logicapps.outputs.logicAppUrl
 
-output ATLAS_RBAC_SUMMARY string = rbac.outputs.assignmentSummary
+// ATLAS_RBAC_SUMMARY was dropped in Phase 11: ARM allows 64 outputs and nothing read it. The
+// summary is still an output of the rbac module deployment in the resource group.

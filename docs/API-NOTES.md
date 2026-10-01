@@ -1526,3 +1526,118 @@ for good and was written into every later checkpoint of every other case. Found 
 `verify_phase07` check 3 counted 1 checkpoint after a reset: every checkpoint carried two deleted
 cases' pending approvals. The executor now drops entries whose approval window closed more than
 10 minutes ago - on park, on checkpoint save and on restore. Nothing can validly answer them.
+
+## 18. Observability findings (Phase 11, 2026-10-01)
+
+### 18.1 The Azure Monitor distro samples by default - set `always_on` for a demo
+
+`azure-monitor-opentelemetry` 1.8.10 (installed) defaults to `microsoft.rate_limited` at 5 traces
+per second when `OTEL_TRACES_SAMPLER` is unset (`_utils/configurations.py`,
+`_default_sampling_ratio`). The sampler respects its parent's decision, so it should drop whole
+traces, not pieces of one - but the Phase 10 canonical trace does have spans whose parents never
+arrived (the triage node's `invoke_agent`, for one). Whatever the cause, ATLAS's volume is a
+demo's and Episode 4's whole beat is a complete waterfall, so `configure_telemetry` now
+`setdefault`s `OTEL_TRACES_SAMPLER=always_on`. An explicit environment value still wins.
+`trace_check` labels any span whose parent is missing `(parent not ingested)` instead of hiding it.
+
+### 18.2 `receive_messages()` emits a span per call, even an empty one
+
+`ServiceBus.receive` was the single largest span name: 20,806 in 24 h from the orchestrator alone,
+almost all empty 10-second polls by the two remediation listeners on two replicas. The SDK opens the
+span in `receive_messages()` whatever it returns (`_servicebus_receiver_async.py`), but in the
+async iterator only when a message arrives. The listener now iterates (`async for message in
+receiver`, ending after `max_wait_time` idle) - same behaviour, no empty spans. The worker already
+iterated.
+
+The next-noisiest source is real work: the tool catalog refresh (`POST /ops-mcp/mcp`, about 7,700 a
+day across two replicas, each refresh an MCP initialize plus `tools/list`). Left as is - it is the
+60-second description governance from Phase 09, and it is visible in APIM for the same reason.
+
+### 18.3 ARM caps a template at 64 outputs
+
+`main.bicep` was at exactly 64. Adding `ATLAS_WORKBOOK_ID` failed the build with `max-outputs`.
+`ATLAS_RBAC_SUMMARY` was read by nothing outside `infra/` and was dropped; the summary is still an
+output of the `rbac` module deployment. Alert rule and web test names are not outputs - the
+verifier lists them by resource group.
+
+### 18.4 `az monitor scheduled-query` needs an extension that prompts to install
+
+Non-interactive, the prompt reads EOF and the command dies with a traceback. The verifier lists
+`Microsoft.Insights/scheduledQueryRules` (2023-12-01) and `metricAlerts` (2018-03-01) with
+`az rest` instead - no extension, no prompt.
+
+### 18.5 Where the signals come from - the Foundry seam
+
+App Insights roles seen on the shared component (one week):
+
+| `cloud_RoleName` | Emitted by | What it shows |
+|---|---|---|
+| `atlas.atlas-web`, `atlas.atlas-orchestrator`, `atlas.atlas-worker` | ATLAS code, `atlas_common.telemetry` (client side) | Every hop, `atlas.*` attributes, Agent Framework GenAI spans (`invoke_agent`, `chat gpt-main`, `execute_tool`), business events |
+| `atlas.atlas-ops-api`, `atlas.atlas-ops-mcp` | ATLAS code in the Function Apps | The enqueue span, Cosmos calls |
+| `func-atlas-api-*`, `func-atlas-mcp-*` | the Functions host | Invocation requests and host logs |
+| `apim-atlas-* East US 2` | APIM diagnostics | Gateway request, backend forward, token and policy timing |
+| `logic-atlas-*` | the Logic Apps runtime | Trigger and action invocations, its own storage traffic |
+| `atlas-incident-agent` | the hosted agent container (Agent Framework, client side) | The agent's own spans and logs |
+| `responsesapi` | Foundry, server side | The platform invoking the hosted agent (`invoke_agent atlas-incident-agent:<version>`) |
+| `agentsv2` | Foundry, server side | Prompt agent runs |
+
+The honest seam for Episode 4: a prompt agent's internals are what Foundry chooses to emit
+(`agentsv2`); a hosted agent shows both sides (`responsesapi` from the platform, our own spans from
+inside the container); the ACA workflow is entirely ours. APIM and Logic Apps spans are
+platform-emitted and cannot carry `atlas.case_id` - they join the case by `operation_Id`, which is
+exactly why `traceparent` propagation is a build-time invariant.
+
+### 18.6 Deviations from PHASE-11, recorded
+
+| Pack | Built | Why |
+|---|---|---|
+| Model usage "from `llm-emit-token-metric`" | From the GenAI chat spans (`gen_ai.usage.*`, by `microsoft.gen_ai.main_agent.name` and `atlas.case_id`) | Orchestrator model traffic does not route through APIM (descoped, CLAUDE.md 7.12), so the APIM token metric only sees direct `/models` calls. The spans see every call. |
+| End-to-end p95 alert at 45 s | 120 s on `workflow.run` | Measured canonical-case p95 is about 83 s, all model time; 45 s would fire permanently. `atlas.case` includes the human approval wait, so it is the wrong span to alert on. |
+| "Turns/min" | Case analyses per 15 minutes | Demo volume; per-minute bins are mostly empty. |
+| Tool error rate per tool | Per backend | A tool failure becomes a typed `ToolFailure` inside `_guard`, which knows the backend, not the tool. Tool spans never fail, by design. |
+| Every alert on a 5-minute window | Windows per rule (5 min to 1 day) | Eval regression is evaluated on a 1-day window: evaluations are hours apart. |
+| Section 6 Quality | Query ships now; data arrives with Phase 12's `eval.run` event | `verify_phase11` reports it PENDING, not passed. |
+| Availability alert | Added (ninth rule) | A standard test without an alert is a chart, not a monitor. |
+
+### 18.7 Smaller traps, all hit while building the verifier
+
+- **`az.cmd` splits URLs at `&`.** On Windows `az` is a batch file, so `az rest --url
+  "...?a=1&b=2"` hands the URL to cmd.exe, which treats `&` as a command separator. The Alerts
+  Management query (`api-version`, `timeRange`, `alertRule`) failed every time. The verifier calls
+  ARM with httpx and the CLI's token instead.
+- **A workbook GET omits its content** unless the request has `canFetchContent=true`
+  (`Microsoft.Insights/workbooks@2023-06-01`). Without it `serializedData` is absent and the
+  workbook looks empty.
+- **`first` and `last` are reserved in KQL** - hit twice more (17.8 already said so). A 400 from the
+  App Insights query API carries the parser's reason in its body; `trace_check` now surfaces it
+  instead of a bare `raise_for_status`.
+- **Multi-line KQL through `az monitor app-insights query`** comes back `Bad Request` from Git Bash
+  on Windows (quoting again). Post the query as a JSON body.
+
+### 18.8 On the cold path, `atlas.case` outlives the case
+
+The case span is opened by the replica that ran the analysis, and it stays open while that replica
+holds the browser's stream waiting for a human (`APPROVAL_WAIT_S`, 300 s). If the approval lands
+on the OTHER replica, that replica resumes cold and dispatches under the case's trace (17.8), while
+the first replica keeps waiting until its timeout. Measured: `atlas.case` 353 s for a case whose
+remediation finished at 90 s. The waterfall is still one trace with every hop; only the root span's
+duration overstates the case. Alert and chart on `workflow.run`, never on `atlas.case` (18.6).
+
+### 18.9 An alert that was already firing is not proof that it fires
+
+The first green run of `verify_phase11` check 4b read "alert fired 31 s after injection". It had
+not: the DLQ alert had been `Fired` since 11:44 - the moment the rule was created - because the DLQ
+already held an orphaned verifier command from 08:18 (`rejected:no_case`) and, later, an RB-0099
+command from a crashed verifier run that never replayed it. A metric alert with `autoMitigate`
+keeps ONE instance open until the condition clears, so "is there a fired alert" says nothing about
+the injection. Check 4b now demands an empty DLQ and a resolved alert first, then accepts only an
+instance whose `startDateTime` is after the injection.
+
+Clearing the leftovers surfaced two more things:
+
+- `dlq_replay` read one `receive_messages()` batch and gave up; one receive can return part of
+  what is there. It now drains until a receive comes back empty. And it gained `--discard`, for a
+  dead letter no replay can ever fix.
+- For about five minutes both dead letters were peekable but not receivable: still locked (lock
+  duration `PT5M`) by an earlier receiver that did not release them. If a DLQ looks stuck right after
+  a script ran, wait out the lock before assuming anything worse.
