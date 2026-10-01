@@ -66,6 +66,7 @@ class IntakeRequest(BaseModel):
     mode: str = "graph"
     traceparent: str | None = None
     raised_by: dict[str, str] = Field(default_factory=dict)
+    approval_ttl_minutes: int | None = Field(default=None, ge=1, le=30)
 
 
 class Partial(BaseModel):
@@ -352,6 +353,7 @@ async def resolve_intake(services: Any, request: IntakeRequest, *, by: str = "in
     case = IncidentCase(
         case_id=request.case_id or new_case_id(), report=request.report.strip(), status="intake",
         mode=request.mode, traceparent=request.traceparent, raised_by=request.raised_by,
+        approval_ttl_minutes=request.approval_ttl_minutes,
     )
     resolved: list[str] = []
     if services is not None:

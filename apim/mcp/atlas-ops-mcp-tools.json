@@ -25,6 +25,13 @@
       "name": "compute_blast_radius",
       "operation": "getBlastRadius",
       "description": "Compute which services are affected if `service_id` fails, up to `depth` hops.\n\nThis is an exact dependency-graph walk, not an estimate. Use it for the suspected cause of\nan incident before judging impact. Never state a blast radius without calling this.\n\nReturns the affected service ids, how many there are, which are Tier 1, and one dependency\npath to each so you can explain why a service is affected."
+    },
+    {
+      "name": "enrich_incident",
+      "api": "atlas-workflows",
+      "operation": "enrich",
+      "in_process": false,
+      "description": "Enrich an incident about ONE service in a single call: the service record, its on-call rotation, recent deployments, health over the window, and the provider status page, gathered by a workflow and returned together.\n\nUse this at the START of an investigation, when a report names a service and you want the full picture before reasoning about cause.\n\nDo NOT use this to take any action - it only reads. Do NOT use it for several services at once; call it once per service. Do NOT use it when you only need one fact (use lookup_service or get_recent_changes instead: they are faster).\n\nArguments: service_id (exact catalogue id, for example svc-payments); window_minutes (optional, default 60). Any part that could not be fetched is listed in `unavailable`."
     }
   ]
 }

@@ -1411,3 +1411,118 @@ are cheap and immutable, and `upsert_toolbox --check` still compares the definit
   could outlive `subprocess`'s own timeout.
 - `AzureCliCredential.get_token("api://x/scope")` sends a delegated scope as `--resource`; use
   `az account get-access-token --scope` for delegated operator tokens.
+
+## 17. Logic Apps and Service Bus findings (Phase 10, 2026-09-30 / 10-01)
+
+### 17.1 An unchanged APIM policy fragment can hang a provision for an hour
+
+`azd provision` re-sends every resource, changed or not. On the first Phase 10 provision the
+`atlas-agent-auth` policy fragment - content identical to Phase 09 - sat at
+`provisioningState: InProgress` for about an hour while the APIM instance itself reported
+`Succeeded` and the gateway kept serving (an agent call through it returned 200 throughout). Every
+resource that depends on the fragments (API policies, the new workflows policy) waited behind it.
+
+Cancelling the ARM deployment did not clear the fragment's state. Re-sending the same content with a
+direct PUT (`az rest --method put .../policyFragments/atlas-agent-auth` with `If-Match: *`)
+completed in about a second, and the re-run provision then went through.
+
+Recovery, if it happens during the T-10 routine: check the gateway still serves
+(`/api/gateway/probe` valid), `az deployment group cancel -n apim-gateway`, re-PUT the stuck
+fragment from `apim/policies/fragments/`, re-run `azd provision`. Never during a broadcast - it is
+all control plane (CLAUDE.md section 9).
+
+### 17.2 Easy Auth `excludedPaths` matches exactly - use a trailing `/*`
+
+The Logic App's Easy Auth excluded `/runtime/webhooks/workflow` so the runtime's webhook callbacks
+and management calls stay reachable. Probed 2026-10-01: the excluded path itself answered with the
+runtime's own bare `Bearer` challenge, but `/runtime/webhooks/workflow/api/management/workflows`
+got Easy Auth's `Bearer realm=...` 401 - the exclusion is an exact match, not a prefix. Every
+webhook callback (the approval wait) would have been refused. `'/runtime/webhooks/workflow/*'`
+excludes the subtree while `/api/{workflow}/triggers/...` stays locked to APIM; both verified the
+same way. The docs describe `excludedPaths` only as "the paths ... not redirected to the login
+page".
+
+### 17.3 One invalid parameter type and no workflow loads at all
+
+`logicapps/parameters.json` declared the APIM key as `SecureString` (the ARM-template habit). The
+Standard runtime supports only `Array, Bool, Float, Int, Object, String` there, and rejected the
+whole file: `Workflow processing failed. Error: 'The parameter with name 'apimKey' has an invalid
+type of 'SecureString'`. ARM still listed both workflows as `Healthy` and the zip deploy
+succeeded; only the runtime's management API (`WorkflowNotFound`) and an App Insights trace
+said otherwise. The key is now a `String` parameter (still a Key Vault reference resolved by the
+platform) and every action that sends it has `runtimeConfiguration.secureData` on its inputs, so
+run history redacts it. Check App Insights `traces` for `Workflow Error` after every deploy.
+
+### 17.4 The Service Bus SDK overwrites `traceparent` - send inside the request's span
+
+Once the Functions exported telemetry (17.5), the worker's spans appeared in App Insights - in a
+DIFFERENT trace from the request that queued them. The ops API set `traceparent` on the message
+explicitly, but the Service Bus SDK traces its own send and stamps `traceparent` from the CURRENT
+OpenTelemetry span, overwriting it. The Python Functions worker does not put the incoming request's
+context into OpenTelemetry, so the current span was a fresh root and the trace broke at exactly the
+Service Bus hop. The enqueue now runs inside a PRODUCER span continued from the request's trace
+(`functions/ops_api/function_app.py`), so whatever the SDK stamps is in the right trace.
+
+### 17.5 Telemetry silently off where Agent Framework is not installed
+
+`atlas_common.telemetry` built its OpenTelemetry resource with Agent Framework's `create_resource`.
+The worker and the Functions do not install Agent Framework, so the import failed and the whole
+Azure Monitor setup was skipped: `Azure Monitor export disabled: ModuleNotFoundError`, one line in
+the console, nothing in App Insights. It now falls back to a plain OpenTelemetry `Resource`.
+
+### 17.6 A decision can beat the approval run's callback registration
+
+The approval run subscribes about 1.5 s after the case parks. An approval inside that window (the
+end-to-end verifier approves at once) found no callback, and the run waited out its whole window.
+`ApprovalWorkflow.complete_eventually` retries for about 30 s, in the background so dispatch never
+waits on a notification workflow. And a handled webhook timeout now ends the run `Succeeded`
+(Terminate) instead of `Failed`.
+
+### 17.7 Deviations from PHASE-10, recorded
+
+- **The orchestrator mints the approval token, not the Logic App.** The pack has the workflow mint an
+  HMAC token with a Key Vault key. ATLAS keeps the Phase 08 design (15.1): an unguessable token
+  stored as a hash, minted by the authority after its own check, spent once by the ops API. The
+  Logic App collects and relays; it holds no key and decides nothing.
+- **The worker proves authorisation from the spent-token record, not from a token in the message.**
+  The message carries no token at all; a command is executable only if the ops API spent a token
+  for exactly that operation (`atlas_worker/authorise.py`).
+- **The ticket is opened by the dispatcher (code), not by an agent tool call.** Idempotent on the
+  case id; the agent-facing `open_ticket` tool remains for the prompt agent.
+- **Dead-lettered is not terminal for the case.** It stays `executing` with remediation status
+  `dead_lettered`, so a replay after the fix can still complete it.
+- **The approval callback goes through the web app**, which only the Logic App's identity may call:
+  the orchestrator has no external ingress.
+
+### 17.8 A cold resume dispatched under the wrong trace
+
+With two orchestrator replicas, an approval that lands on the replica NOT running the case resumes it
+cold, from the checkpoint, inside the approval HTTP request - and the dispatch then ran under that
+request's trace. The remediation (APIM -> Function -> Service Bus -> worker) was one unbroken chain,
+but hung off the approval's waterfall instead of the incident's. The dispatch now always continues
+the trace stored on the case (`case.traceparent`), so warm or cold, either replica, the incident's
+trace holds every hop.
+
+Also learned while checking it: `az monitor app-insights query` only looks at the LAST HOUR unless
+given `--offset`, whatever the query's own time filter says - a quiet source of "no rows". And
+`first`/`last` are reserved in KQL.
+
+### 17.9 Progress and results raced: a lost update on the case
+
+`verify_phase10` check 4: the replayed RB-0099 operation `succeeded`, the result was consumed, and
+the case still read `executing / dead_lettered`. Progress (topic) and results (queue) are consumed
+by separate loops on both replicas, and both did full-document read-modify-write. A progress event
+that had read the case before the result landed wrote the old status back over the completed case.
+Progress now patches ONLY the `remediation` field, with a Cosmos `filter_predicate` that refuses
+once the remediation is final; the result writes the whole record last and unconditionally. A
+straggler can no longer undo an outcome (`tests/test_remediation_flow.py`).
+
+### 17.10 The shared approval executor leaked parked cases into every checkpoint (Phase 07 bug)
+
+The workflow - and its `ApprovalExecutor` - is built once per shape and reused for every case on a
+replica. `_pending` (parked cases by request id) only ever lost an entry when THIS replica resumed
+that case; a case answered on the other replica, resumed cold, or deleted by `demo-reset` stayed
+for good and was written into every later checkpoint of every other case. Found when
+`verify_phase07` check 3 counted 1 checkpoint after a reset: every checkpoint carried two deleted
+cases' pending approvals. The executor now drops entries whose approval window closed more than
+10 minutes ago - on park, on checkpoint save and on restore. Nothing can validly answer them.

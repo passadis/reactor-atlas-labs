@@ -1,0 +1,33 @@
+<!--
+  atlas-workflows (/workflows): the Logic Apps Standard workflows, behind the same gate as the tools.
+
+  The caller must be an agent (Entra token + Atlas.Agent) with the agents' subscription key -
+  the orchestrator starting an approval run, or an agent calling the enrich tool (via the
+  atlas-ops-mcp tool enrich_incident). The Logic App accepts only APIM's managed identity (Easy
+  Auth, no SAS signature anywhere), so this is the only way in. Each operation's policy rewrites to
+  its workflow's Request trigger.
+-->
+<policies>
+  <inbound>
+    <base />
+    <rate-limit-by-key calls="60" renewal-period="60" retry-after-header-name="Retry-After"
+        counter-key="@(context.Subscription != null ? context.Subscription.Id : context.Request.IpAddress)" />
+    <include-fragment fragment-id="atlas-agent-auth" />
+    <authentication-managed-identity resource="api://atlas-ops-api" output-token-variable-name="backend-token" />
+    <set-header name="Authorization" exists-action="override">
+      <value>@("Bearer " + (string)context.Variables["backend-token"])</value>
+    </set-header>
+    <set-header name="Ocp-Apim-Subscription-Key" exists-action="delete" />
+    <set-backend-service backend-id="logicapp-backend" />
+  </inbound>
+  <backend>
+    <forward-request timeout="60" />
+  </backend>
+  <outbound>
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+    <include-fragment fragment-id="atlas-error-envelope" />
+  </on-error>
+</policies>

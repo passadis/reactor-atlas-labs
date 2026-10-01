@@ -50,6 +50,8 @@ services:
     host: containerapp
     language: py
     docker:
+      path: ./Dockerfile
+      context: ../..
       remoteBuild: true
 
   opsapi:

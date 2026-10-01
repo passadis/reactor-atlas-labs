@@ -9,6 +9,7 @@
 #   web, orchestrator   run the agent tools in-process (Phase 03/06)
 #   func                the MCP server's write tools call the ops API through the gateway
 #   worker              Phase 10 remediation executor
+#   logic               Phase 10 enrich-incident workflow reads the ops API as an agent
 #   foundry project MI  the toolbox's connection to the APIM MCP servers (prompt agent)
 #   hosted agent        its Entra agent identity runs the same tools (Phase 05)
 #
@@ -62,6 +63,7 @@ add "web"          "$(principal_of_identity atlas-web)"
 add "orchestrator" "$(principal_of_identity atlas-orch)"
 add "func"         "$(principal_of_identity atlas-func)"
 add "worker"       "$(principal_of_identity atlas-worker)"
+add "logic"        "$(principal_of_identity atlas-logic)"
 add "foundry-project" "$(project_principal)"
 add "hosted-agent" "$(env_get ATLAS_HOSTED_AGENT_PRINCIPAL_ID)"
 

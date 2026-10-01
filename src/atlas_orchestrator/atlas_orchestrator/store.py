@@ -23,6 +23,7 @@ from .models import IncidentCase, IncidentReport
 log = logging.getLogger("atlas.orchestrator")
 
 CASES = "cases"
+CARRIED_FIELDS = ("ticket", "remediation", "result", "approval_workflow")
 
 
 def _now() -> str:
@@ -37,17 +38,22 @@ class CaseRepository:
 
     async def create_pending(
         self, case_id: str, report: str, mode: str, *, traceparent: str | None = None,
-        raised_by: dict[str, str] | None = None,
+        raised_by: dict[str, str] | None = None, approval_ttl_minutes: int | None = None,
     ) -> dict[str, Any]:
         doc: dict[str, Any] = {
             "id": case_id, "case_id": case_id, "kind": "workflow-case", "status": "pending",
             "report": report, "mode": mode, "traceparent": traceparent,
-            "raised_by": raised_by or {}, "created_at": _now(), "updated_at": _now(),
+            "raised_by": raised_by or {}, "approval_ttl_minutes": approval_ttl_minutes,
+            "created_at": _now(), "updated_at": _now(),
         }
         await self._write(doc)
         return doc
 
     async def save(self, case: IncidentCase, report: IncidentReport | None = None) -> None:
+        # Phase 10: the ticket and the remediation record live beside the typed state, not in it
+        # (a new field on IncidentCase would not round-trip through checkpoints already parked).
+        # A save rewrites the whole document, so carry them - and the last report - forward.
+        existing = await self.get(case.case_id) or {}
         doc: dict[str, Any] = {
             "id": case.case_id, "case_id": case.case_id, "kind": "workflow-case",
             "status": case.status, "report": case.report, "mode": case.mode,
@@ -55,9 +61,49 @@ class CaseRepository:
             "state": case.model_dump(mode="json"),
             "created_at": case.created_at.isoformat(), "updated_at": _now(),
         }
+        for carried in CARRIED_FIELDS:
+            if carried in existing:
+                doc[carried] = existing[carried]
         if report is not None:
             doc["result"] = report.model_dump(mode="json", exclude={"case"})
         await self._write(doc)
+
+    async def patch_remediation(self, case_id: str, record: dict[str, Any], *,
+                                only_if_open: bool = True) -> bool:
+        """Write ONLY the `remediation` field, and - by default - only while it is not final.
+
+        Progress and results arrive on different queues, at either replica. Full-document
+        read-modify-write let a late progress event that had read the case BEFORE the result
+        write the old status back over a completed case (API-NOTES 17.9). A patch touches one
+        field; the predicate makes a finished remediation immune to stragglers. False if the
+        predicate refused (the remediation was already final).
+        """
+        # dead_lettered counts as closed too: only scripts/dlq_replay.py re-opens it (status
+        # `replaying`), so a straggler from the last failed attempt cannot flip it to running.
+        predicate = ("FROM c WHERE NOT IS_DEFINED(c.remediation.status) OR c.remediation.status "
+                     "NOT IN ('succeeded', 'failed', 'dead_lettered')") if only_if_open else None
+        try:
+            await self._store.container(CASES).patch_item(
+                item=case_id, partition_key=case_id,
+                patch_operations=[{"op": "set", "path": "/remediation", "value": record},
+                                  {"op": "set", "path": "/updated_at", "value": _now()}],
+                filter_predicate=predicate)
+        except Exception as exc:
+            if getattr(exc, "status_code", None) == 412:
+                return False
+            log.exception("remediation patch failed for %s", case_id)
+            return False
+        return True
+
+    async def set_fields(self, case_id: str, fields: dict[str, Any]) -> dict[str, Any] | None:
+        """Set top-level fields on a case document (ticket, remediation). Read-modify-write."""
+        doc = await self.get(case_id)
+        if doc is None:
+            return None
+        doc.update(fields)
+        doc["updated_at"] = _now()
+        await self._write(doc)
+        return doc
 
     async def get(self, case_id: str) -> dict[str, Any] | None:
         try:
@@ -131,6 +177,14 @@ class CaseRepository:
         if doc is None:
             return
         doc.update({"status": "resolved", "case_status": case.status, "updated_at": _now()})
+        await self._write(doc)
+
+    async def mark_approval(self, case_id: str, status: str, detail: str = "") -> None:
+        """Set an approval row's status (the sweep parks rows it cannot resume)."""
+        doc = await self.get_approval(case_id)
+        if doc is None:
+            return
+        doc.update({"status": status, "detail": detail[:300], "updated_at": _now()})
         await self._write(doc)
 
     async def get_approval(self, case_id: str) -> dict[str, Any] | None:

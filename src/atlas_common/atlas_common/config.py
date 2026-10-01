@@ -83,6 +83,10 @@ class Settings:
     # The APIM MCP server whose tools/list supplies the tool descriptions, so one description in
     # APIM governs every agent surface. Empty: the in-code docstrings.
     tool_catalog_url: str = ""
+    # Phase 10. The gateway's workflows API (the Logic App approval run), and the web console's
+    # public URL for the approval link the workflow sends. Empty: no approval workflow is started.
+    workflows_url: str = ""
+    console_url: str = ""
 
     @property
     def foundry_openai_base_url(self) -> str:
@@ -117,4 +121,6 @@ class Settings:
             or "api://atlas-ops-api/.default",
             apim_key_secret_uri=os.environ.get("ATLAS_APIM_KEY_SECRET_URI", "").strip(),
             tool_catalog_url=os.environ.get("ATLAS_TOOL_CATALOG_URL", "").strip(),
+            workflows_url=os.environ.get("ATLAS_WORKFLOWS_URL", "").strip(),
+            console_url=os.environ.get("ATLAS_CONSOLE_URL", "").strip(),
         )

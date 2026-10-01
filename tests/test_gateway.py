@@ -116,6 +116,12 @@ def test_mcp_tools_map_to_real_spec_operations() -> None:
     spec = yaml.safe_load(SPEC.read_text(encoding="utf-8"))
     ops = {op["operationId"] for item in spec["paths"].values() for op in item.values()}
     for entry in tools:
+        if entry.get("api", "atlas-ops-api") != "atlas-ops-api":
+            # A workflow tool (Phase 10): its operation is declared in apim-gateway.bicep.
+            bicep = (ROOT / "infra/modules/apim-gateway.bicep").read_text(encoding="utf-8")
+            assert f"name: '{entry['operation']}'" in bicep, entry
+            assert entry.get("in_process") is False, entry
+            continue
         assert entry["operation"] in ops, entry
         assert entry["name"] in TOOL_NAMES, f"{entry['name']} is not an in-process tool"
 
@@ -125,6 +131,9 @@ def test_the_offline_fallback_matches_the_governed_descriptions() -> None:
     gateway outage never silently changes what the model is told."""
     tools = json.loads(TOOLS_JSON.read_text(encoding="utf-8"))["tools"]
     for entry in tools:
+        if entry.get("in_process") is False:
+            assert "Do NOT" in entry["description"], entry["name"]
+            continue
         doc = inspect.cleandoc(getattr(AtlasTools, entry["name"]).__doc__ or "")
         assert doc == entry["description"], f"{entry['name']}: docstring drifted from APIM"
 

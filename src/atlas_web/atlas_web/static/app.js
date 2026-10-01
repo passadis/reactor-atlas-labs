@@ -11,7 +11,9 @@ const state = {
   sessionId: sessionStorage.getItem("atlas.session") || null,
   busy: false,
   turnId: null,
-  actAs: sessionStorage.getItem("atlas.actas") === "readonly",
+  // "", "manager" or "readonly". Narrowing only ever lowers privilege (entitlements.narrow).
+  actAs: ["manager", "readonly"].includes(sessionStorage.getItem("atlas.actas"))
+    ? sessionStorage.getItem("atlas.actas") : "",
 };
 
 function esc(text) {
@@ -57,7 +59,7 @@ function banner(text, bad = false, seconds = null) {
 // ----------------------------------------------------------------------- identity --
 function headers() {
   const h = { "Content-Type": "application/json" };
-  if (state.actAs) h["x-atlas-act-as"] = "readonly";
+  if (state.actAs) h["x-atlas-act-as"] = state.actAs;
   return h;
 }
 async function loadMe() {
@@ -255,10 +257,10 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("#contract").addEventListener("change", (e) =>
     document.querySelectorAll(".contract").forEach((p) => (p.hidden = !e.target.checked)));
-  $("#actas").checked = state.actAs;
+  $("#actas").value = state.actAs;
   $("#actas").addEventListener("change", (e) => {
-    state.actAs = e.target.checked;
-    sessionStorage.setItem("atlas.actas", state.actAs ? "readonly" : "");
+    state.actAs = e.target.value;
+    sessionStorage.setItem("atlas.actas", state.actAs);
     loadMe();
   });
   // Container Apps ingress does not tell the server that a streaming client went away, so
@@ -439,6 +441,10 @@ async function runWorkflow(message) {
     wfMark(d.node, p.ok ? "done" : "degraded",
       `${(p.seconds ?? 0).toFixed ? p.seconds.toFixed(1) : p.seconds}s` + (tools ? ` / ${tools} tools` : ""));
   });
+  es.addEventListener("dispatched", (e) => {
+    const d = JSON.parse(e.data);
+    watchRemediation(d.case_id);
+  });
   es.addEventListener("approval_required", (e) => {
     showApproval(JSON.parse(e.data).data || {});
     prose.innerHTML = `<p>Waiting on a human. The case is checkpointed - it survives a restart.</p>`;
@@ -515,6 +521,46 @@ function hideApproval(note) {
   if (note) $("#wf-approval-note").textContent = note;
 }
 
+// -- remediation (Episode 3) ------------------------------------------------------------------
+// The worker's progress lands on the case document (the orchestrator consumes the Service Bus
+// topic), so the browser polls the case while a remediation is in flight. Always rendered; the
+// ep3 scope only decides whether the panel is visible (CLAUDE.md section 8).
+let rmTimer = null;
+function renderRemediation(doc) {
+  const rm = doc.remediation || {};
+  const ticket = doc.ticket || {};
+  if (!rm.status && !ticket.ticket_id) return false;
+  $("#rm-empty").hidden = true;
+  $("#rm-meta").hidden = false;
+  $("#rm-ticket").textContent = ticket.ticket_id || rm.ticket_id || "-";
+  $("#rm-op").textContent = rm.operation_id || "-";
+  const total = rm.steps_total || 0;
+  const done = (rm.steps || []).filter((s) => s.status === "succeeded").length;
+  $("#rm-status").textContent = `${rm.status || "-"}${total ? ` (${done}/${total} steps)` : ""}`
+    + (rm.detail && rm.status !== "running" ? ` - ${rm.detail}` : "");
+  $("#rm-steps").innerHTML = (rm.steps || []).map((s) =>
+    `<li><strong>${esc(s.status)}</strong> ${esc(String(s.order))}. ${esc(s.action)} `
+    + `<code>${esc(s.target_service)} ${esc(s.command_ref)}</code>`
+    + (s.attempt > 1 ? ` <span class="muted">attempt ${esc(String(s.attempt))}</span>` : "")
+    + (s.detail ? `<br><span class="muted">${esc(s.detail)}</span>` : "") + "</li>").join("");
+  return ["succeeded", "dead_lettered", "dispatch_failed", "failed"].includes(rm.status);
+}
+
+function watchRemediation(caseId) {
+  if (!caseId) return;
+  if (rmTimer) clearInterval(rmTimer);
+  const started = Date.now();
+  const tick = async () => {
+    try {
+      const r = await fetch(`/api/workflow/${caseId}`, { headers: headers() });
+      if (r.ok && renderRemediation(await r.json())) { clearInterval(rmTimer); rmTimer = null; }
+    } catch (e) { /* transient; the next tick retries */ }
+    if (Date.now() - started > 10 * 60 * 1000) { clearInterval(rmTimer); rmTimer = null; }
+  };
+  rmTimer = setInterval(tick, 2000);
+  tick();
+}
+
 async function decide(decision) {
   if (!wf.approval) return;
   const comment = $("#wf-comment").value.trim();
@@ -538,6 +584,7 @@ async function decide(decision) {
     }
     $("#wf-comment").value = "";
     hideApproval(`${decision === "approve" ? "Approved" : "Rejected"}; the case is resuming from its checkpoint.`);
+    if (decision === "approve") watchRemediation(caseId);
   } catch (e) {
     $("#wf-approval-note").textContent = "Could not reach ATLAS. The case is checkpointed and still resumable.";
   } finally {

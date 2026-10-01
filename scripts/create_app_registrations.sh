@@ -35,6 +35,7 @@ ROLE_ENGINEER="6f1d3a41-0b9c-4d5e-9a2f-11c0a7e4b301"
 ROLE_APPROVER="7a2e4b52-1c0d-4e6f-8b3a-22d1b8f5c412"
 ROLE_READONLY="8b3f5c63-2d1e-4f70-9c4b-33e2c9a6d523"
 ROLE_AGENT="9c4a6d74-3e2f-4081-ad5c-44f3dab7e634"
+ROLE_DIRECTOR="ad5b7e85-4f30-4192-be6d-55a4ebc8f745"
 
 get_app_id() { az ad app list --filter "displayName eq '$1'" --query "[0].appId" -o tsv 2>/dev/null; }
 
@@ -47,7 +48,8 @@ web_manifest() {
 [
   {"allowedMemberTypes":["User"],"description":"Raise and triage incidents","displayName":"Atlas Engineer","id":"${ROLE_ENGINEER}","isEnabled":true,"value":"Atlas.Engineer"},
   {"allowedMemberTypes":["User"],"description":"Approve remediation plans","displayName":"Atlas Approver","id":"${ROLE_APPROVER}","isEnabled":true,"value":"Atlas.Approver"},
-  {"allowedMemberTypes":["User"],"description":"Read-only access. Deliberately cannot approve.","displayName":"Atlas ReadOnly","id":"${ROLE_READONLY}","isEnabled":true,"value":"Atlas.ReadOnly"}
+  {"allowedMemberTypes":["User"],"description":"Read-only access. Deliberately cannot approve.","displayName":"Atlas ReadOnly","id":"${ROLE_READONLY}","isEnabled":true,"value":"Atlas.ReadOnly"},
+  {"allowedMemberTypes":["User"],"description":"Approve director-level plans (break-glass). The presenter's role.","displayName":"Atlas Director","id":"${ROLE_DIRECTOR}","isEnabled":true,"value":"Atlas.Director"}
 ]
 JSON
 }

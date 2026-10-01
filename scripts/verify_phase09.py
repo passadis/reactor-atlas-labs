@@ -25,6 +25,7 @@ import sys
 import time
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -95,7 +96,9 @@ def web() -> httpx.Client:
 
 # ------------------------------------------------------------------------ 1 APIs --
 def apis_exist() -> None:
-    expected = {"atlas-ops-api": ("http", 11), "atlas-ops-mcp": ("mcp", 5),
+    governed = json.loads((Path(__file__).resolve().parents[1] / "apim/mcp/"
+                           "atlas-ops-mcp-tools.json").read_text(encoding="utf-8"))["tools"]
+    expected = {"atlas-ops-api": ("http", 11), "atlas-ops-mcp": ("mcp", len(governed)),
                 "atlas-tools-mcp": ("mcp", 0), "atlas-models": ("http", 2)}
     for api, (kind, count) in expected.items():
         props = arm(f"/apis/{api}")["properties"]
@@ -114,7 +117,7 @@ def apis_exist() -> None:
 
     probe = web().post("/api/gateway/probe", json={"kind": "mcp_tools"}).raise_for_status().json()
     ctx["probe"] = probe
-    for server, want in (("ops-mcp", 5), ("tools-mcp", 6)):
+    for server, want in (("ops-mcp", len(governed)), ("tools-mcp", 6)):
         info = probe["servers"].get(server, {})
         tools = [t["name"] for t in info.get("tools", [])]
         call = info.get("sample_call", {})

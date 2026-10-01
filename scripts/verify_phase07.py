@@ -173,7 +173,14 @@ def approval_is_guarded() -> None:
               response.status_code == 200,
               f"persona '{persona}' IS in {required}, so approval was accepted "
               f"(HTTP {response.status_code})")
-        settled = _orchestrator_case(case_id) or {}
+        # A warm approval returns as soon as the answer joins the live run; the run resumes a
+        # moment later. Since Phase 10 the presenter is a director, so this path now runs - poll.
+        settled: dict[str, Any] = {}
+        for _ in range(15):
+            settled = _orchestrator_case(case_id) or {}
+            if settled.get("status") not in (None, "awaiting_approval"):
+                break
+            time.sleep(2)
         check("5 an accepted approval advances the case",
               settled.get("status") in ("approved", "executing", "completed"),
               f"status {settled.get('status')}")

@@ -46,6 +46,8 @@ _QUIET_LOGGERS = (
     "azure.core.pipeline.policies.http_logging_policy",
     "azure.identity",
     "azure.monitor.opentelemetry.exporter",
+    # Logs every AMQP link state change at INFO - hundreds of lines a minute per receiver.
+    "azure.servicebus",
 )
 
 _state: dict[str, Any] = {"configured": False, "exporting": False}
@@ -53,6 +55,28 @@ _state: dict[str, Any] = {"configured": False, "exporting": False}
 
 def capture_content() -> bool:
     return os.environ.get("ATLAS_CAPTURE_CONTENT", "").strip().lower() in ("1", "true", "yes")
+
+
+def _resource(service_name: str, service_version: str | None) -> Any:
+    """The OpenTelemetry resource for this process.
+
+    Agent Framework's helper where it is installed (web, orchestrator, hosted agent); plain
+    OpenTelemetry where it is not (the worker, the Functions). Importing the helper
+    unconditionally made the worker's whole exporter setup fail on ModuleNotFoundError - its spans
+    silently never reached App Insights and the trace stopped at the Service Bus hop.
+    """
+    version = service_version or os.environ.get("ATLAS_VERSION", "dev")
+    attributes = {"service.namespace": SERVICE_NAMESPACE,
+                  "deployment.environment": os.environ.get("AZURE_ENV_NAME", "local")}
+    try:
+        from agent_framework.observability import create_resource
+    except ImportError:
+        from opentelemetry.sdk.resources import Resource
+
+        return Resource.create({"service.name": service_name, "service.version": version,
+                                **attributes})
+    return create_resource(service_name=service_name, service_version=version,
+                           attributes=attributes)
 
 
 def configure_telemetry(service_name: str, *, service_version: str | None = None) -> bool:
@@ -86,17 +110,9 @@ def configure_telemetry(service_name: str, *, service_version: str | None = None
         )
     else:
         try:
-            from agent_framework.observability import create_resource
             from azure.monitor.opentelemetry import configure_azure_monitor
 
-            resource = create_resource(
-                service_name=service_name,
-                service_version=service_version or os.environ.get("ATLAS_VERSION", "dev"),
-                attributes={
-                    "service.namespace": SERVICE_NAMESPACE,
-                    "deployment.environment": os.environ.get("AZURE_ENV_NAME", "local"),
-                },
-            )
+            resource = _resource(service_name, service_version)
             options: dict[str, Any] = {
                 "connection_string": connection_string,
                 "resource": resource,
@@ -112,7 +128,9 @@ def configure_telemetry(service_name: str, *, service_version: str | None = None
 
     try:
         from agent_framework.observability import enable_instrumentation
-
+    except ImportError:
+        return bool(_state["exporting"])  # no agents in this process; nothing to instrument
+    try:
         enable_instrumentation(enable_sensitive_data=capture_content())
     except Exception as exc:
         _log.warning("Agent Framework instrumentation disabled: %s", type(exc).__name__)

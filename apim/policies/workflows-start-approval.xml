@@ -1,0 +1,20 @@
+<!--
+  POST /workflows/approvals -> the approve-remediation workflow's Request trigger.
+  Easy Auth replaces the SAS query parameters (sp, sv, sig); only api-version remains.
+-->
+<policies>
+  <inbound>
+    <base />
+    <rewrite-uri template="/api/approve-remediation/triggers/When_an_approval_is_requested/invoke?api-version=2022-05-01"
+        copy-unmatched-params="false" />
+  </inbound>
+  <backend>
+    <base />
+  </backend>
+  <outbound>
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>

@@ -39,7 +39,12 @@
 
       <div class="persona" id="persona" title="Signed-in identity and the persona whose entitlements apply">
         <span id="persona-name">...</span>
-        <label class="actas"><input type="checkbox" id="actas"> act as readonly</label>
+        <label class="actas" title="Narrowing only lowers privilege">act as
+          <select id="actas">
+            <option value="">myself</option>
+            <option value="manager">manager</option>
+            <option value="readonly">readonly</option>
+          </select></label>
       </div>
       <a class="nav" href="/approvals" data-scope="ep2">Approvals</a>
     </div>
@@ -123,7 +128,14 @@
       </section>
       <section class="panel" data-scope="ep3" aria-label="Gateway and remediation">
         <h3>Gateway and remediation</h3>
-        <p class="muted">APIM hops, MCP tool provenance and worker progress stream here (Phase 09/10).</p>
+        <p class="muted" id="rm-empty">After approval: the ticket, then every remediation step as the worker runs it.</p>
+        <dl class="meta" id="rm-meta" hidden>
+          <dt>Ticket</dt><dd id="rm-ticket">-</dd>
+          <dt>Operation</dt><dd id="rm-op">-</dd>
+          <dt>Status</dt><dd id="rm-status">-</dd>
+          <dt>Path</dt><dd class="muted">orchestrator &rarr; APIM &rarr; Function &rarr; Service Bus &rarr; worker</dd>
+        </dl>
+        <ol id="rm-steps" class="wf-decisions"></ol>
       </section>
       <section class="panel" data-scope="ep4" aria-label="Quality">
         <h3>Evaluation</h3>

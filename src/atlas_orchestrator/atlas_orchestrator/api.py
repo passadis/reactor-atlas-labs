@@ -16,6 +16,7 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from typing import Any
 
 from atlas_agent.factory import IncidentAgentRuntime
@@ -31,7 +32,8 @@ from .checkpoints import probe as probe_checkpoints
 from .graph import MODES
 from .models import IncidentCase
 from .node_ids import WORKFLOW_GRAPH
-from .policy import approval_is_valid
+from .policy import EXPIRY_ROLE, approval_is_valid
+from .remediation import RemediationListener
 from .runner import CaseRunner
 
 log = logging.getLogger("atlas.orchestrator")
@@ -44,6 +46,8 @@ class NewCase(BaseModel):
     report: str = Field(min_length=8, max_length=4000)
     mode: str | None = None
     raised_by: dict[str, str] = Field(default_factory=dict)
+    # Can only shorten the policy's 30-minute window (the Phase 10 timeout test).
+    approval_ttl_minutes: int | None = Field(default=None, ge=1, le=30)
 
 
 class Question(BaseModel):
@@ -75,10 +79,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
              runner.default_mode, app.state.checkpoint_status, app.state.reference_data)
     # Finish anything whose approval landed while this service was down.
     app.state.swept = await runner.sweep()
+    # Phase 10: results and progress from the remediation worker, onto the case documents.
+    listener = RemediationListener(runner.cases, credential)
+    listener.start()
     try:
         yield
     finally:
-        # Order matters: stop the runs, then close the clients they were using.
+        # Order matters: stop listening, stop the runs, then close the clients they were using.
+        await listener.stop()
         await app.state.runner.close()
         await runtime.close()
 
@@ -131,7 +139,8 @@ async def create_case(body: NewCase, request: Request,
         return {"case_id": report.case_id, "status": "complete",
                 "result": report.model_dump(mode="json", exclude={"case"})}
     doc = await engine.create(body.report, mode=body.mode, traceparent=traceparent,
-                              raised_by=body.raised_by)
+                              raised_by=body.raised_by,
+                              approval_ttl_minutes=body.approval_ttl_minutes)
     return {"case_id": doc["case_id"], "status": "pending", "mode": doc["mode"]}
 
 
@@ -235,6 +244,44 @@ async def _decide(case_id: str, body: Decide, request: Request, *,
     await engine.cases.record_answer(case_id, answer.model_dump(mode="json"))
     outcome = await engine.answer(case_id, answer)
     return {"case_id": case_id, "approved": approved, "by": body.by, "role": body.role, **outcome}
+
+
+class Expire(BaseModel):
+    by: str = Field(default="approval-window", min_length=3, max_length=200)
+    comment: str = Field(default="the approval window closed with no decision", max_length=1000)
+
+
+@app.post("/cases/{case_id}/expire")
+async def expire_case(case_id: str, body: Expire, request: Request) -> dict[str, Any]:
+    """The Logic App's timeout path. The clock decides, not the caller: before the window has
+    closed this is refused (409) and the case stays parked."""
+    engine = runner(request)
+    doc = await engine.get(case_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"no case {case_id}")
+    state = doc.get("state") or {}
+    case = IncidentCase.model_validate(state) if state else None
+    if case is None or case.status != "awaiting_approval" or case.policy is None:
+        raise HTTPException(status_code=409, detail=f"case {case_id} is not awaiting approval")
+    expires = case.policy.expires_at
+    if expires is None or datetime.now(UTC) <= expires:
+        raise HTTPException(status_code=409,
+                            detail=f"the approval window is open until {expires}")
+    answer = ApprovalResponse(approved=False, by=body.by, role=EXPIRY_ROLE, comment=body.comment)
+    await engine.cases.record_answer(case_id, answer.model_dump(mode="json"))
+    outcome = await engine.answer(case_id, answer)
+    return {"case_id": case_id, "expired": True, **outcome}
+
+
+@app.post("/cases/{case_id}/dispatch")
+async def dispatch_case(case_id: str, request: Request) -> dict[str, Any]:
+    """Retry a dispatch that failed (gateway down, say). Idempotent end to end."""
+    engine = runner(request)
+    doc = await engine.get(case_id)
+    if doc is None or not doc.get("state"):
+        raise HTTPException(status_code=404, detail=f"no case {case_id}")
+    case = IncidentCase.model_validate(doc["state"])
+    return await engine.dispatcher.dispatch(case)
 
 
 @app.post("/cases/{case_id}/resume")

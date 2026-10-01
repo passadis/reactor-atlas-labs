@@ -26,6 +26,9 @@ param opsApiClientId string
 @description('Object id of the API Management system-assigned identity - the only allowed caller.')
 param apimPrincipalId string
 
+@description('Name of the Logic Apps Standard site (Phase 10).')
+param logicAppName string
+
 resource apiApp 'Microsoft.Web/sites@2024-04-01' existing = {
   name: apiAppName
 }
@@ -83,4 +86,27 @@ resource mcpAuth 'Microsoft.Web/sites/config@2024-04-01' = {
   parent: mcpApp
   name: 'authsettingsV2'
   properties: authSettings
+}
+
+// Phase 10: the Logic App's Request triggers take Easy Auth instead of a SAS signature, locked to
+// APIM like the Functions (learn.microsoft.com/azure/connectors/connectors-native-reqres, "Security
+// and authentication"). One exception, deliberately: /runtime/webhooks/workflow is where the
+// runtime serves webhook-action callbacks and its own management calls. A callback URL carries a
+// per-run signature the platform issues for that one wait - a capability, not a stored secret.
+resource logicApp 'Microsoft.Web/sites@2024-04-01' existing = {
+  name: logicAppName
+}
+
+resource logicAuth 'Microsoft.Web/sites/config@2024-04-01' = {
+  parent: logicApp
+  name: 'authsettingsV2'
+  properties: union(authSettings, {
+    globalValidation: {
+      requireAuthentication: true
+      unauthenticatedClientAction: 'Return401'
+      // A WILDCARD. excludedPaths matches exactly: '/runtime/webhooks/workflow' alone excludes that
+      // one path and still locks every callback and management call beneath it (API-NOTES 17.2).
+      excludedPaths: ['/runtime/webhooks/workflow/*']
+    }
+  })
 }

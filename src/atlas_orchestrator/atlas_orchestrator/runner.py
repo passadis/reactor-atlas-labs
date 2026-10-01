@@ -64,6 +64,7 @@ from .node_ids import (
     WORKFLOW_GRAPH,
     WORKFLOW_SEQUENTIAL,
 )
+from .remediation import ApprovalWorkflow, Dispatcher
 from .store import CaseRepository
 
 log = logging.getLogger("atlas.orchestrator")
@@ -169,6 +170,52 @@ class CaseRunner:
         self.entitlements: dict[str, Entitlement] = {}
         self._workflows: dict[Mode, Workflow] = {}
         self._runs: dict[str, Run] = {}
+        # Phase 10: after the human. See remediation.py.
+        self.dispatcher = Dispatcher(self.cases, runtime.store, runtime.ops)
+        self.approval_workflow = ApprovalWorkflow(
+            self.cases, runtime.store, runtime.workflows, runtime.settings.console_url)
+        self._tasks: set[asyncio.Task[Any]] = set()
+
+    def _background(self, coro: Any) -> None:
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._background_done)
+
+    def _background_done(self, task: asyncio.Task[Any]) -> None:
+        self._tasks.discard(task)
+        # A failed background task must say so: unretrieved exceptions otherwise vanish.
+        if not task.cancelled() and task.exception() is not None:
+            log.error("background task failed: %r", task.exception())
+
+    async def _after_decision(self, run: Run) -> None:
+        """Once a human (or the policy) has decided: close the Logic App's wait, then dispatch.
+
+        Deterministic, idempotent and never fatal to the case: every outcome is recorded on the
+        case document, and a failed dispatch can be retried with POST /cases/{id}/dispatch.
+        """
+        case = run.case
+        if case is None:
+            return
+        if case.approval is not None and case.status in ("approved", "rejected"):
+            decision = {"case_id": case.case_id, "approved": case.approval.approved,
+                        "by": case.approval.by, "role": case.approval.role,
+                        "comment": case.approval.comment, "status": case.status}
+            # Background: the run may not have registered its callback yet, and dispatch must
+            # not wait on a notification workflow.
+            self._background(self.approval_workflow.complete_eventually(case.case_id, decision))
+        if case.status == "approved":
+            try:
+                # Always in the CASE's trace, whichever replica and whichever path (warm, or cold
+                # from a checkpoint inside the approval request) gets here. Otherwise a cold
+                # resume dispatched under the approval request's trace, and the remediation hung
+                # off a different waterfall from the incident (API-NOTES 17.8).
+                carrier = {"traceparent": case.traceparent} if case.traceparent else None
+                with continued_from(carrier), span("atlas.dispatch", case_id=case.case_id):
+                    record = await self.dispatcher.dispatch(case)
+            except Exception as exc:
+                log.exception("dispatch of %s failed", case.case_id)
+                record = {"status": "dispatch_failed", "detail": type(exc).__name__}
+            run.publish(self._event(run, "dispatched", data=record))
 
     async def load_reference_data(self) -> str:
         """Read the catalogue and entitlements. Until this runs, the gate is not wired in."""
@@ -231,12 +278,14 @@ class CaseRunner:
 
     async def create(self, report: str, *, mode: str | None = None,
                      traceparent: str | None = None,
-                     raised_by: dict[str, str] | None = None) -> dict[str, Any]:
+                     raised_by: dict[str, str] | None = None,
+                     approval_ttl_minutes: int | None = None) -> dict[str, Any]:
         """Register a case. The run itself starts when someone opens the stream."""
         case_id = new_case_id()
         resolved = normalise_mode(mode or self.default_mode)
         return await self.cases.create_pending(
             case_id, report, resolved, traceparent=traceparent, raised_by=raised_by,
+            approval_ttl_minutes=approval_ttl_minutes,
         )
 
     async def get(self, case_id: str) -> dict[str, Any] | None:
@@ -280,6 +329,7 @@ class CaseRunner:
             report=str(doc["report"]), case_id=case_id, mode=str(doc.get("mode") or "graph"),
             traceparent=doc.get("traceparent"),
             raised_by=dict(doc.get("raised_by") or {}),
+            approval_ttl_minutes=doc.get("approval_ttl_minutes"),
         )
         run.task = asyncio.create_task(self._drive(run, request))
         return run
@@ -313,6 +363,9 @@ class CaseRunner:
                     await self._run_handoff(run, request)
                 else:
                     await self._run_graph(run, request, mode)
+                # Inside the case span on purpose: the dispatch's calls through APIM, and the
+                # Service Bus message after them, stay in this trace - one waterfall to the worker.
+                await self._after_decision(run)
                 if run.report is not None:
                     case_span.set_attribute("atlas.case.severity", run.report.severity)
                     case_span.set_attribute("atlas.case.needs_human", run.report.needs_human)
@@ -339,6 +392,10 @@ class CaseRunner:
                 suspended = True
                 run.request_id = event.request_id
                 await self._persist_pending_approval(run)
+                if run.case is not None:
+                    # The Logic App collects and notifies; it does not decide. Not awaited: a slow
+                    # or dead workflow must never hold up the case (the console works without it).
+                    self._background(self.approval_workflow.start(run.case))
                 run.publish(self._event(run, "approval_required", node=APPROVAL,
                                         data=payload.model_dump(mode="json")))
             elif event.type in ("executor_invoked", "executor_completed"):
@@ -587,6 +644,7 @@ class CaseRunner:
         if run.case is not None:
             await self.cases.save(run.case, run.report)
             await self.cases.close_approval(run.case)
+        await self._after_decision(run)
         run.finish()
         return {
             "case_id": case_id, "path": "cold", "checkpoint_id": target,
@@ -606,12 +664,17 @@ class CaseRunner:
         for doc in answered:
             case_id = str(doc["case_id"])
             answer = doc.get("answer") or {}
+            # Only the response's own fields: older rows also carry the audit fields
+            # (accepted, refusal_code, ...) and ApprovalResponse forbids extras.
+            known = {k: v for k, v in answer.items() if k in ApprovalResponse.model_fields}
             try:
                 outcome = await self.resume_from_checkpoint(
-                    case_id, response=ApprovalResponse.model_validate(answer))
+                    case_id, response=ApprovalResponse.model_validate(known))
             except Exception as exc:
                 log.exception("sweep could not resume %s", case_id)
                 outcome = {"case_id": case_id, "error": f"{type(exc).__name__}: {exc}"[:200]}
+                # Do not fail on the same row at every restart: park it for a human, visibly.
+                await self.cases.mark_approval(case_id, "abandoned", outcome["error"])
             results.append(outcome)
         if results:
             log.info("startup sweep resumed %d case(s): %s", len(results), results)

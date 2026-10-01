@@ -378,6 +378,17 @@ resource workerEventsSender 'Microsoft.Authorization/roleAssignments@2022-04-01'
   }
 }
 
+// Phase 10: the orchestrator follows remediation progress (subscription orchestrator-progress).
+resource orchestratorEventsReceiver 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(eventsTopic.id, orchestratorPrincipalId, roles.serviceBusDataReceiver)
+  scope: eventsTopic
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.serviceBusDataReceiver)
+    principalId: orchestratorPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 resource webEventsReceiver 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(eventsTopic.id, webPrincipalId, roles.serviceBusDataReceiver)
   scope: eventsTopic

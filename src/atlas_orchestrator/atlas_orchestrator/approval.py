@@ -23,7 +23,7 @@ hold the authority, and they read the catalogue, the entitlement table and the c
 # module needs the future import.
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from agent_framework import Executor, WorkflowContext, handler, response_handler
@@ -33,7 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .executors import NodeProgress
 from .models import ApprovalRecord, IncidentCase, PolicyDecision
 from .node_ids import APPROVAL, POLICY_GATE
-from .policy import approval_is_valid, evaluate, implicated_services
+from .policy import EXPIRY_ROLE, approval_is_valid, evaluate, implicated_services
 
 log = logging.getLogger("atlas.orchestrator")
 
@@ -130,6 +130,13 @@ class PolicyGateExecutor(Executor):
                 impact_affected=case.impact.affected_service_ids if case.impact else (),
             ),
         )
+        if case.approval_ttl_minutes and decision.expires_at is not None:
+            # A case may ask for a SHORTER window, never a longer one (the timeout test).
+            shorter = decision.evaluated_at + timedelta(minutes=case.approval_ttl_minutes)
+            if shorter < decision.expires_at:
+                decision.expires_at = shorter
+                decision.reasons.append(
+                    f"approval window shortened to {case.approval_ttl_minutes} min for this case")
         case.policy = decision
         for reason in decision.reasons:
             case.decide(self.id, "policy", reason)
@@ -160,6 +167,9 @@ class PolicyGateExecutor(Executor):
         await ctx.send_message(case)
 
 
+PRUNE_AFTER = timedelta(minutes=10)
+
+
 class ApprovalExecutor(Executor):
     """Suspends the workflow on a human, and resumes when one answers.
 
@@ -174,6 +184,24 @@ class ApprovalExecutor(Executor):
         self._entitlements = entitlements or {}
         # Cases parked on a human, by request id. Survives a checkpoint through the hooks below.
         self._pending: dict[str, IncidentCase] = {}
+
+    def _prune(self) -> None:
+        """Forget parked cases whose approval window closed more than PRUNE_AFTER ago.
+
+        The workflow object - and so this executor - is reused for every case of its shape on a
+        replica, and `_pending` used to grow for good: a case answered on the OTHER replica, resumed
+        cold, or deleted by demo-reset stayed here and rode along in every later checkpoint of every
+        other case (verify_phase07 found it; API-NOTES 17.10). Nothing can validly answer a request
+        whose window closed; the margin leaves room for the expiry path itself.
+        """
+        cutoff = datetime.now(UTC) - PRUNE_AFTER
+        stale = [rid for rid, case in self._pending.items()
+                 if case.policy is not None and case.policy.expires_at is not None
+                 and case.policy.expires_at < cutoff]
+        for rid in stale:
+            self._pending.pop(rid, None)
+        if stale:
+            log.info("approval executor pruned %d expired parked case(s)", len(stale))
 
     @staticmethod
     def request_id_for(case_id: str) -> str:
@@ -190,6 +218,7 @@ class ApprovalExecutor(Executor):
             return
         decision = case.policy or PolicyDecision()
         request_id = self.request_id_for(case.case_id)
+        self._prune()
         self._pending[request_id] = case
         log.info("case %s suspended for approval by %s", case.case_id,
                  decision.required_approver_roles or ["an approver"])
@@ -213,6 +242,9 @@ class ApprovalExecutor(Executor):
             return
         decision = case.policy or PolicyDecision()
         current_plan_id = case.plan.plan_id if case.plan else ""
+        if not response.approved and response.role == EXPIRY_ROLE:
+            await self._expire(case, decision, original_request, response, request_id, ctx)
+            return
         ok, reason, code = approval_is_valid(
             decision, approver_role=response.role,
             approver_entitlement=self._entitlements.get(response.role),
@@ -247,6 +279,35 @@ class ApprovalExecutor(Executor):
                    f"({response.role})"))
         await ctx.send_message(case)
 
+    async def _expire(
+        self, case: IncidentCase, decision: PolicyDecision, original_request: ApprovalRequest,
+        response: ApprovalResponse, request_id: str,
+        ctx: WorkflowContext[IncidentCase, NodeProgress | IncidentCase],
+    ) -> None:
+        """The window closed with no human answer: reject, but only if it really has closed.
+
+        Deterministic on the clock. An `approval-window` rejection that arrives early - a bug, or
+        someone replaying the Logic App's timeout call - is refused and the case stays parked.
+        """
+        now = datetime.now(UTC)
+        if decision.expires_at is None or now <= decision.expires_at:
+            case.decide(self.id, "approval-refused",
+                        f"expired: the window is still open until {decision.expires_at}")
+            self._pending[request_id] = case
+            await ctx.request_info(request_for(case, decision), ApprovalResponse,
+                                   request_id=request_id)
+            return
+        case.approval = ApprovalRecord(
+            approved=False, by=response.by, role=response.role, comment=response.comment,
+            at=response.at, plan_id=original_request.plan_id, accepted=True)
+        case.transition("rejected", by=self.id, rule="approval-expired",
+                        detail=f"no approver answered before {decision.expires_at.isoformat()}; "
+                               f"nothing was dispatched")
+        await ctx.yield_output(NodeProgress(
+            node=self.id, case_id=case.case_id, seconds=0.0, ok=True,
+            detail="rejected: the approval window expired"))
+        await ctx.send_message(case)
+
     async def on_checkpoint_save(self) -> dict[str, Any]:
         """Persist the parked cases.
 
@@ -254,6 +315,7 @@ class ApprovalExecutor(Executor):
         `Failed to create checkpoint at iteration N ... this does not fail the workflow run` -
         the run looks healthy and nothing is ever written (docs/API-NOTES.md 14.1).
         """
+        self._prune()
         return {"pending": {rid: case.model_dump(mode="json")
                             for rid, case in self._pending.items()}}
 
@@ -262,6 +324,7 @@ class ApprovalExecutor(Executor):
             rid: IncidentCase.model_validate(raw)
             for rid, raw in (state.get("pending") or {}).items()
         }
+        self._prune()
         log.info("approval executor restored with %d parked case(s)", len(self._pending))
 
 

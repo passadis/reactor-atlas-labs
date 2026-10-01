@@ -26,6 +26,9 @@ from .models import ImpactResult, PolicyDecision, RemediationPlan, RunbookRef
 # An approval is a statement about a plan at a moment. Thirty minutes later the telemetry has
 # moved on, so the approval is stale and the gate asks again (rule 6).
 APPROVAL_TTL = timedelta(minutes=30)
+# The system's own answer when the window closes unanswered (Phase 10). Only valid once the clock
+# says so: before `expires_at` it is refused like any other wrong answer.
+EXPIRY_ROLE = "approval-window"
 # A runbook nobody has reviewed in a year may still be right, but it may not be actioned without
 # a human reading it first (rule 4).
 STALE_RUNBOOK_DAYS = 365
@@ -243,6 +246,7 @@ __all__ = [
     "AUTO_APPROVE_MAX_BLAST_RADIUS",
     "AUTO_APPROVE_TIERS",
     "BREAK_GLASS_ROLE",
+    "EXPIRY_ROLE",
     "STALE_RUNBOOK_DAYS",
     "PolicyDecision",
     "approval_is_valid",

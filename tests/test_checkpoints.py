@@ -437,3 +437,23 @@ async def test_a_case_with_no_plan_passes_the_gate_without_an_illegal_transition
     assert reports, "a plan-less case never reached its report"
     assert reports[0].case.status == "aggregated"
     assert reports[0].needs_human is True
+
+
+def test_the_approval_executor_forgets_cases_whose_window_long_closed() -> None:
+    """The shared executor used to carry every parked case forever, into every later checkpoint
+    of every other case (API-NOTES 17.10)."""
+    from datetime import UTC, datetime, timedelta
+
+    from atlas_orchestrator.approval import ApprovalExecutor
+    from atlas_orchestrator.models import IncidentCase, PolicyDecision
+
+    def parked(case_id: str, closed_minutes_ago: int) -> IncidentCase:
+        return IncidentCase(case_id=case_id, report="parked case", status="awaiting_approval",
+                            policy=PolicyDecision(expires_at=datetime.now(UTC)
+                                                  - timedelta(minutes=closed_minutes_ago)))
+
+    executor = ApprovalExecutor()
+    executor._pending = {"approval:CASE-OLD": parked("CASE-OLD", 60),
+                         "approval:CASE-JUST": parked("CASE-JUST", 2)}
+    state = asyncio.run(executor.on_checkpoint_save())
+    assert set(state["pending"]) == {"approval:CASE-JUST"}  # still answerable by the expiry path

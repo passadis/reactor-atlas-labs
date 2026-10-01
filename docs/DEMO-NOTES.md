@@ -824,3 +824,86 @@ on each of a dozen calls. That is what governance costs here; say the number rat
 docs show. And a passthrough MCP server must authenticate through a backend entity, because APIM's
 own tool discovery never runs your policy. Both cost a failed deployment; both are in
 `docs/API-NOTES.md` 16.
+
+## Phase 10 - Approvals and asynchronous remediation (Episode 3, second half)
+
+### What was built
+
+The loop closes. After a human approves in the console, deterministic code - never a model -
+opens the ticket, mints the single-use approval token and submits the plan through the gateway.
+The ops API checks and spends the token and puts the command on Service Bus. A session-aware
+worker proves the command is authorised from the spent-token record, runs each step against the
+simulated estate, publishes progress, and reports the result. The orchestrator writes it all onto
+the case, and the console shows it step by step.
+
+| Piece | What it is |
+|---|---|
+| `approve-remediation` (Logic App) | Starts when a case parks. Notifies (log only - no mail connector in this tenant), then waits on a webhook for up to the approval window. The orchestrator decides; the workflow collects. On timeout it asks the orchestrator to expire the case, which only happens if the orchestrator's own clock agrees. |
+| `enrich-incident` (Logic App) | A whole workflow as one agent tool: service, on-call, recent changes, health and a status page, fanned out through the gateway. Exposed as the MCP tool `enrich_incident` on `atlas-ops-mcp`, and in the toolbox. |
+| `atlas_worker` | Session receiver (one session per target service), lock renewal, retry with backoff, dead-letter after 5 deliveries, one trace with the request. |
+| `remediation-events` / `-results` | Progress per step, and the final record, consumed by the orchestrator. |
+
+The presenter holds `Atlas.Director` (decided 2026-10-01) so the canonical break-glass plan can be
+approved in the console. The "act as" selector narrows to manager (the 403 beat) or readonly.
+
+### What to show
+
+1. `make e2e-remediation` - incident to completed case through the console, with the timing.
+   Or drive it in the UI: raise the incident, approve, and watch the Gateway and remediation panel.
+2. The Logic App run in the portal: the webhook wait, then the callback that completed it.
+3. `make inject-failing-plan`, wait a minute, `make dlq-inspect`: the RB-0099 plan retried five
+   times and is in the DLQ with its reason. The case is `executing` / `dead_lettered`, not lost.
+4. `make dlq-replay OP=OP-XXXX`: the fault is cleared, the command replays with a new MessageId,
+   step 1 is NOT re-run, the case completes.
+5. Application Insights, transaction search, the trace id from step 1: web, orchestrator, APIM,
+   the Function, the worker - one waterfall across the Service Bus hop.
+
+### Measured (deployed, eastus2, 2026-10-01)
+
+| Beat | Time |
+|---|---|
+| Canonical incident to the approval gate | 57-84 s (the model's share) |
+| Approval accepted | 0.5-0.7 s |
+| Approval to command dispatched (ticket, token, gateway, queue) | 2.4-4.7 s |
+| Approval to first step done | 7-9 s |
+| Approval to remediation finished (7-8 steps) | 30-37 s |
+| Whole loop, incident to completed case | 89-121 s (budget 180 s) |
+| RB-0099 to the DLQ (5 deliveries with backoff) | about 40 s |
+| Replay to completed | under 20 s |
+| Timeout path, 1-minute window | rejected 2 s after the window closed |
+| `make demo-reset`, clean state | 3.4 s |
+| `make demo-reset`, after a day of runs (737 checkpoints, 244 cases, full DLQs) | about 50 s - run it daily, not once a week |
+
+### Commands
+
+```bash
+make e2e-remediation             # the whole loop, timed
+make inject-failing-plan         # stage the RB-0099 plan
+make dlq-inspect                 # what is in the DLQ, and why
+make dlq-replay OP=OP-XXXX       # fix the fault, replay, finish
+make demo-reset                  # T-10 only: clean slate in under 60 s
+make verify-phase10
+```
+
+### Fallbacks
+
+| If this fails live | Do this |
+|---|---|
+| Approval returns 403 | Check the act-as selector is on "myself". A director plan needs the presenter's own role. |
+| No progress in the panel | The orchestrator follows the worker through Service Bus; check `make dlq-inspect` and the worker log. The case document is the truth: `GET /api/workflow/{id}`. |
+| The Logic App run stays Running | It waits for the decision; the orchestrator completes it within ~30 s of deciding. If the decision raced the registration, it still completes (API-NOTES 17.6). |
+| The trace is missing a hop | Ingestion takes 1-3 minutes. Show the recorded trace id from this table. |
+
+### Worth saying out loud
+
+**The Logic App collects a decision; it does not make one.** It notifies, waits and relays. The
+orchestrator validates the role and the plan, and only the orchestrator mints the token. That is
+the difference between a workflow that approves things and a workflow that collects a human
+decision.
+
+**The queue message carries no authority.** It names an operation, a case and a plan - nothing
+else. The worker executes only if the ops API spent an approval token for exactly that operation.
+Putting a message on the queue with send rights is not enough; we show it being refused.
+
+**Dead-lettered is not failed.** The case waits for a human; after the fix, the replay finishes it
+without re-running what already happened.

@@ -30,6 +30,9 @@ param mcpAppBaseUrl string
 @description('Foundry account name; the model API forwards to its OpenAI v1 endpoint.')
 param foundryAccountName string
 
+@description('Base URL of the Logic Apps Standard site (Phase 10).')
+param logicAppBaseUrl string
+
 @description('Key Vault that holds the subscription keys.')
 param keyVaultName string
 
@@ -178,9 +181,9 @@ resource opsMcpTools 'Microsoft.ApiManagement/service/apis/tools@2025-09-01-prev
     properties: {
       displayName: t.name
       description: t.description
-      operationId: resourceId('Microsoft.ApiManagement/service/apis/operations', apim.name, opsApi.name, t.operation)
+      operationId: resourceId('Microsoft.ApiManagement/service/apis/operations', apim.name, t.?api ?? opsApi.name, t.operation)
     }
-    dependsOn: [opsMcp]
+    dependsOn: [opsMcp, workflowsApi, workflowsOperations]
   }
 ]
 
@@ -272,6 +275,100 @@ resource toolsMcpDiagnostics 'Microsoft.ApiManagement/service/apis/diagnostics@2
   dependsOn: [toolsMcp]
 }
 
+// ------------------------------------------------------------------------ atlas-workflows --
+
+// Phase 10. The Logic Apps Standard workflows, gated like the tools. The Logic App accepts only
+// APIM's managed identity (functions-auth.bicep), so there is no SAS signature anywhere.
+resource logicAppBackend 'Microsoft.ApiManagement/service/backends@2024-05-01' = {
+  parent: apim
+  name: 'logicapp-backend'
+  properties: {
+    description: 'Logic Apps Standard. Accepts only this gateway managed identity.'
+    url: logicAppBaseUrl
+    protocol: 'http'
+    tls: { validateCertificateChain: true, validateCertificateName: true }
+  }
+}
+
+resource workflowsApi 'Microsoft.ApiManagement/service/apis@2024-05-01' = {
+  parent: apim
+  name: 'atlas-workflows'
+  properties: {
+    displayName: 'ATLAS workflows'
+    description: 'Logic Apps Standard workflows: the approval run and incident enrichment.'
+    path: 'workflows'
+    protocols: ['https']
+    subscriptionRequired: true
+    subscriptionKeyParameterNames: { header: 'Ocp-Apim-Subscription-Key', query: 'subscription-key' }
+  }
+}
+
+resource workflowsPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-05-01' = {
+  parent: workflowsApi
+  name: 'policy'
+  properties: {
+    format: 'rawxml'
+    value: loadTextContent('../../apim/policies/workflows.xml')
+  }
+  dependsOn: [policyFragments, logicAppBackend]
+}
+
+var workflowOperations = [
+  {
+    name: 'start-approval'
+    method: 'POST'
+    url: '/approvals'
+    display: 'Start an approval run'
+    description: 'Start the approve-remediation workflow for a parked case. Orchestrator only.'
+    query: []
+    policy: loadTextContent('../../apim/policies/workflows-start-approval.xml')
+  }
+  {
+    name: 'enrich'
+    method: 'GET'
+    url: '/enrich'
+    display: 'Enrich an incident'
+    description: 'Run the enrich-incident workflow for one service and return the aggregate.'
+    query: [
+      { name: 'service_id', type: 'string', required: true, description: 'Exact catalogue id, for example svc-payments.' }
+      { name: 'window_minutes', type: 'integer', required: false, description: 'How far back to look. Default 60.' }
+    ]
+    policy: loadTextContent('../../apim/policies/workflows-enrich.xml')
+  }
+]
+
+resource workflowsOperations 'Microsoft.ApiManagement/service/apis/operations@2024-05-01' = [
+  for op in workflowOperations: {
+    parent: workflowsApi
+    name: op.name
+    properties: {
+      displayName: op.display
+      description: op.description
+      method: op.method
+      urlTemplate: op.url
+      request: {
+        queryParameters: [for q in op.query: {
+          name: q.name
+          type: q.type
+          required: q.required
+          description: q.description
+        }]
+      }
+    }
+  }
+]
+
+resource workflowsOperationPolicies 'Microsoft.ApiManagement/service/apis/operations/policies@2024-05-01' = [
+  for (op, i) in workflowOperations: {
+    parent: workflowsOperations[i]
+    name: 'policy'
+    properties: {
+      format: 'rawxml'
+      value: op.policy
+    }
+  }
+]
+
 // ------------------------------------------------------------------------ atlas-models --
 
 resource modelsApi 'Microsoft.ApiManagement/service/apis@2024-05-01' = {
@@ -316,14 +413,14 @@ resource modelsPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-05-01'
 
 // ------------------------------------------------------------------------ products --
 
-var agentProductApis = ['atlas-ops-api', 'atlas-ops-mcp', 'atlas-tools-mcp', 'atlas-models']
+var agentProductApis = ['atlas-ops-api', 'atlas-ops-mcp', 'atlas-tools-mcp', 'atlas-models', 'atlas-workflows']
 var readonlyProductApis = ['atlas-ops-api', 'atlas-models']
 
 resource agentProductBindings 'Microsoft.ApiManagement/service/products/apis@2025-09-01-preview' = [
   for a in agentProductApis: {
     #disable-next-line use-parent-property
     name: '${apim.name}/${agentToolsProductName}/${a}'
-    dependsOn: [opsApi, opsMcp, toolsMcp, modelsApi]
+    dependsOn: [opsApi, opsMcp, toolsMcp, modelsApi, workflowsApi]
   }
 ]
 

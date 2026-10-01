@@ -236,11 +236,35 @@ chaos-ops-api-off: ## Clear the ops API chaos flag
 verify-phase09: ## Verify the AI gateway: APIs, governance, only-via-APIM, metrics, four surfaces
 	bash scripts/verify_phase09.sh
 
+.PHONY: logicapps-deploy
+logicapps-deploy: ## Deploy the Logic Apps workflows (approve-remediation, enrich-incident)
+	bash scripts/deploy_logicapps.sh
+
+.PHONY: dlq-inspect
+dlq-inspect: ## List dead-lettered remediation commands with reason and case
+	$(PY) -m scripts.dlq_inspect
+
+.PHONY: dlq-replay
+dlq-replay: ## Replay one after the fix: make dlq-replay OP=OP-XXXX
+	$(PY) -m scripts.dlq_replay --command-id $(OP) --fix
+
+.PHONY: e2e-remediation
+e2e-remediation: ## The whole loop through the console: incident, approval, Service Bus, worker
+	$(PY) -m scripts.e2e_remediation
+
+.PHONY: inject-failing-plan
+inject-failing-plan: ## Stage the RB-0099 plan that retries and dead-letters (the DLQ beat)
+	$(PY) -m scripts.inject_failing_plan
+
+.PHONY: verify-phase10
+verify-phase10: ## Verify approvals, async remediation, DLQ/replay, timeout and the one trace
+	bash scripts/verify_phase10.sh
+
 .PHONY: verify-all
 verify-all: ## Run every scripts/verify_phase*.sh plus smoke and security (Phase 14)
 	@set -e; for s in scripts/verify_phase*.sh; do 	  echo "=== $$s ==="; bash "$$s"; 	done
 	@echo "All phase verifications passed."
 
 .PHONY: demo-reset
-demo-reset: ## Return runtime state to the known-good baseline in under 60s (Phase 14)
-	$(call PENDING,Phase 14 - hardening and verification)
+demo-reset: ## Return runtime state to the known-good baseline in under 60s (T-10 routine only)
+	$(PY) -m scripts.demo_reset

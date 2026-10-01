@@ -24,11 +24,15 @@ from typing import Any
 import azure.functions as func
 from atlas_common.auth import get_async_credential
 from atlas_common.config import DEFAULT_OPS_NOW
+from atlas_common.remediation import child_traceparent
 from atlas_common.repositories import CosmosStore
 from atlas_common.telemetry import configure_telemetry
+from opentelemetry import trace
+from opentelemetry.propagate import extract
 from opsapi import core
 
 log = logging.getLogger("atlas.opsapi")
+_tracer = trace.get_tracer("atlas.opsapi")
 configure_telemetry("atlas-ops-api")
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
@@ -51,14 +55,24 @@ class LiveDeps:
         from azure.servicebus import ServiceBusMessage
         from azure.servicebus.aio import ServiceBusClient
 
-        async with ServiceBusClient(self._fqdn, credential=self._credential) as client:
-            sender = client.get_queue_sender(self._queue)
-            async with sender:
-                await sender.send_messages(ServiceBusMessage(
-                    json.dumps(body), message_id=message_id, session_id=session_id,
-                    correlation_id=correlation, content_type="application/json",
-                    application_properties={"traceparent": f"00-{correlation}-0000000000000000-01"},
-                ))
+        # Send INSIDE a span continued from the request's trace. The Service Bus SDK traces its own
+        # send and stamps the message's `traceparent` from the CURRENT span, overwriting ours; the
+        # Python Functions worker does not put the request's context into OpenTelemetry, so
+        # without this the SDK started a fresh trace and the worker's spans landed in it - the
+        # waterfall broke at exactly the Service Bus hop (docs/API-NOTES.md 17.4).
+        traceparent = child_traceparent(None, fallback_trace_id=correlation)
+        parent = extract({"traceparent": traceparent})
+        with _tracer.start_as_current_span("atlas.remediation.enqueue", context=parent,
+                                           kind=trace.SpanKind.PRODUCER):
+            async with ServiceBusClient(self._fqdn, credential=self._credential) as client:
+                sender = client.get_queue_sender(self._queue)
+                async with sender:
+                    # CorrelationId = the case (the contract in atlas_common.remediation).
+                    await sender.send_messages(ServiceBusMessage(
+                        json.dumps(body), message_id=message_id, session_id=session_id,
+                        correlation_id=str(body.get("case_id") or correlation),
+                        content_type="application/json",
+                        application_properties={"traceparent": traceparent}))
 
 
 def _settings() -> Any:

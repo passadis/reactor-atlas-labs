@@ -40,6 +40,7 @@ import urllib.parse
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from importlib import resources
 from typing import Annotated, Any, Literal
 
@@ -229,6 +230,17 @@ class WorkflowRequest(BaseModel):
 
     message: str = Field(min_length=8, max_length=4000)
     mode: Literal["graph", "sequential_only", "handoff"] = "graph"
+    # Phase 10: may only SHORTEN the policy's 30-minute approval window (the timeout test).
+    approval_ttl_minutes: int | None = Field(default=None, ge=1, le=30)
+
+
+class ApprovalCallback(BaseModel):
+    """From the Logic App `approve-remediation` (Phase 10), authenticated as its own identity."""
+
+    action: Literal["subscribe", "unsubscribe", "expired"]
+    case_id: str = Field(pattern=r"^CASE-[A-Z0-9]+$")
+    plan_id: str = Field(default="", max_length=64)
+    callback_url: str | None = Field(default=None, max_length=2000)
 
 
 class AskRequest(BaseModel):
@@ -420,7 +432,8 @@ def _routes(app: FastAPI) -> None:
             response = await atlas(request).orchestrator.post(
                 "/cases",
                 json={"report": body.message, "mode": body.mode,
-                      "raised_by": {"email": actor.principal.email, "persona": actor.persona_role}},
+                      "raised_by": {"email": actor.principal.email, "persona": actor.persona_role},
+                      "approval_ttl_minutes": body.approval_ttl_minutes},
                 headers={"traceparent": current_traceparent() or ""},
             )
             response.raise_for_status()
@@ -673,6 +686,51 @@ def _routes(app: FastAPI) -> None:
                     f"DataModel/{urllib.parse.quote(json.dumps(model))}")
         return {"turn_id": turn_id, "trace_id": tid,
                 "traceparent": f"00-{tid}-0000000000000000-01", "app_insights": link}
+
+    # -- Logic App callbacks (Phase 10) --------------------------------------------------------
+    #
+    # The orchestrator has no external ingress, so the approval workflow reaches it through here.
+    # Only the Logic App's managed identity may call this: Easy Auth validates the token, and the
+    # object id is checked against ATLAS_LOGIC_PRINCIPAL_ID. The Logic App never decides - it
+    # registers its webhook callback, and on timeout it asks the orchestrator to expire the case,
+    # which the orchestrator refuses unless its own clock agrees.
+    @app.post("/api/callbacks/approvals")
+    async def approval_callback(body: ApprovalCallback, request: Request,
+                                principal: Annotated[Principal, Depends(current_principal)],
+                                ) -> dict[str, Any]:
+        expected = os.environ.get("ATLAS_LOGIC_PRINCIPAL_ID", "")
+        if not expected or principal.object_id != expected:
+            raise HTTPException(403, "Only the approval workflow may call this.")
+        state = atlas(request)
+        doc_id = f"callback:{body.case_id}"
+        if body.action == "subscribe":
+            logic_host = os.environ.get("ATLAS_LOGIC_HOST", "")
+            url = body.callback_url or ""
+            # Never let a registration point the orchestrator at an arbitrary URL.
+            if not logic_host or urllib.parse.urlparse(url).hostname != logic_host:
+                raise HTTPException(400, "The callback must be the approval workflow's own URL.")
+            await state.runtime.store.upsert("approvals", {
+                "id": doc_id, "kind": "approval-callback", "case_id": body.case_id,
+                "plan_id": body.plan_id, "callback_url": url, "status": "waiting",
+                "registered_at": datetime.now(UTC).isoformat()})
+            return {"case_id": body.case_id, "status": "waiting"}
+        if body.action == "unsubscribe":
+            rows = await state.runtime.store.query(
+                "approvals", "SELECT * FROM c WHERE c.id = @id",
+                [{"name": "@id", "value": doc_id}], partition_key=body.case_id)
+            if rows and rows[0].get("status") == "waiting":
+                await state.runtime.store.upsert("approvals", {**rows[0], "status": "unsubscribed"})
+            return {"case_id": body.case_id, "status": "unsubscribed"}
+        orchestrator_url()
+        try:
+            response = await state.orchestrator.post(
+                f"/cases/{body.case_id}/expire",
+                json={"by": "approval-window", "comment": "the approval workflow timed out"},
+                headers={"traceparent": current_traceparent() or ""})
+        except httpx.HTTPError as exc:
+            raise HTTPException(503, "I could not reach the workflow orchestrator.") from exc
+        return {"case_id": body.case_id, "orchestrator_status": response.status_code,
+                "detail": response.json() if response.content else None}
 
     # -- gateway probe (Phase 09) ------------------------------------------------------------
     @app.post("/api/gateway/probe")

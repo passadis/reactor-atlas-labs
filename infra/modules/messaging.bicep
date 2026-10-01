@@ -102,6 +102,19 @@ resource webProgressSubscription 'Microsoft.ServiceBus/namespaces/topics/subscri
   }
 }
 
+// Phase 10: the orchestrator follows each remediation step through this and writes it onto the
+// case, where the UI reads it. Separate from web-progress so neither consumer steals the other's.
+resource orchestratorProgressSubscription 'Microsoft.ServiceBus/namespaces/topics/subscriptions@2024-01-01' = {
+  parent: eventsTopic
+  name: 'orchestrator-progress'
+  properties: {
+    maxDeliveryCount: 5
+    lockDuration: 'PT1M'
+    defaultMessageTimeToLive: 'PT1H'
+    deadLetteringOnMessageExpiration: false
+  }
+}
+
 resource auditSubscription 'Microsoft.ServiceBus/namespaces/topics/subscriptions@2024-01-01' = {
   parent: eventsTopic
   name: 'audit'

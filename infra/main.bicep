@@ -108,6 +108,9 @@ var rgName = 'rg-atlas-${environmentName}'
 // depending on it (APIM depends on the Functions; this breaks the cycle).
 var gatewayUrl = 'https://${abbrs.apiManagementService}-atlas-${resourceToken}.azure-api.net'
 var apimAgentKeySecretUri = '${data.outputs.keyVaultUri}secrets/apim-agent-key'
+// Phase 10: deterministic for the same reason - the web app, APIM and the Logic App all need each
+// other's addresses, and strings do not create dependency cycles.
+var logicAppHost = '${abbrs.webSitesLogicApp}-atlas-${resourceToken}.azurewebsites.net'
 
 var tags = {
   'azd-env-name': environmentName
@@ -243,6 +246,9 @@ module computeAca './modules/compute-aca.bicep' = {
     opsApiScope: 'api://atlas-gateway/.default'
     apimKeySecretUri: apimAgentKeySecretUri
     toolCatalogUrl: '${gatewayUrl}/ops-mcp/mcp'
+    workflowsUrl: '${gatewayUrl}/workflows'
+    logicPrincipalId: identity.outputs.logicPrincipalId
+    logicHost: logicAppHost
     webAppClientId: webAppClientId
     webImage: webImage
     orchestratorImage: orchestratorImage
@@ -313,6 +319,7 @@ module apimGateway './modules/apim-gateway.bicep' = {
     foundryAccountName: foundry.outputs.accountName
     keyVaultName: data.outputs.keyVaultName
     loggerId: apim.outputs.apimLoggerId
+    logicAppBaseUrl: 'https://${logicAppHost}'
   }
 }
 
@@ -325,6 +332,7 @@ module functionsAuth './modules/functions-auth.bicep' = if (!empty(opsApiClientI
     mcpAppName: computeFunctions.outputs.mcpAppName
     opsApiClientId: opsApiClientId
     apimPrincipalId: apim.outputs.apimPrincipalId
+    logicAppName: logicapps.outputs.logicAppName
   }
 }
 
@@ -340,6 +348,9 @@ module logicapps './modules/logicapps.bicep' = {
     logicIdentityClientId: identity.outputs.logicClientId
     appInsightsConnectionString: observability.outputs.appInsightsConnectionString
     orchestratorUrl: computeAca.outputs.orchestratorInternalUrl
+    webUrl: computeAca.outputs.webAppUrl
+    gatewayUrl: gatewayUrl
+    apimKeySecretUri: apimAgentKeySecretUri
   }
 }
 

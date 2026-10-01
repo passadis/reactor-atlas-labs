@@ -252,6 +252,9 @@ class IncidentCase(BaseModel):
     mode: str = "graph"
     traceparent: str | None = None
     raised_by: dict[str, str] = Field(default_factory=dict)
+    # Phase 10: a case may ask for a shorter approval window (1-30 min), never a longer one. Used
+    # by the timeout verification; `None` is the policy's 30 minutes.
+    approval_ttl_minutes: int | None = Field(default=None, ge=1, le=30)
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 

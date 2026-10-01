@@ -32,6 +32,19 @@ param appInsightsConnectionString string
 @description('Orchestrator internal URL. The approval workflow posts the human decision back here.')
 param orchestratorUrl string
 
+// Phase 10. The orchestrator is internal-only, so the approval workflow reaches it through the web
+// app's callback endpoint, as its own identity. The enrich workflow calls the ops API through the
+// gateway as an agent; the subscription key is a Key Vault REFERENCE resolved by the platform with
+// the workflow identity - the value never appears in source, Bicep or an app setting.
+@description('Public URL of the web app.')
+param webUrl string
+
+@description('APIM gateway base URL.')
+param gatewayUrl string
+
+@description('Key Vault secret URI of the agent APIM subscription key.')
+param apimKeySecretUri string
+
 var planName = '${abbrs.webServerFarm}-atlas-logic-${resourceToken}'
 var siteName = '${abbrs.webSitesLogicApp}-atlas-${resourceToken}'
 // Separate from the application storage account, deliberately. Names: no hyphens, max 24 chars.
@@ -94,6 +107,7 @@ resource logicApp 'Microsoft.Web/sites@2024-04-01' = {
   properties: {
     serverFarmId: plan.id
     httpsOnly: true
+    keyVaultReferenceIdentity: logicIdentityId
     siteConfig: {
       minTlsVersion: '1.2'
       ftpsState: 'Disabled'
@@ -113,6 +127,12 @@ resource logicApp 'Microsoft.Web/sites@2024-04-01' = {
         { name: 'WORKFLOWS_SUBSCRIPTION_ID', value: subscription().subscriptionId }
         { name: 'WORKFLOWS_RESOURCE_GROUP_NAME', value: resourceGroup().name }
         { name: 'WORKFLOWS_LOCATION_NAME', value: location }
+        { name: 'ATLAS_WEB_CALLBACK_URL', value: '${webUrl}/api/callbacks/approvals' }
+        { name: 'ATLAS_WEB_AUDIENCE', value: 'api://atlas-web' }
+        { name: 'ATLAS_LOGIC_IDENTITY_ID', value: logicIdentityId }
+        { name: 'ATLAS_GATEWAY_URL', value: gatewayUrl }
+        { name: 'ATLAS_GATEWAY_AUDIENCE', value: 'api://atlas-gateway' }
+        { name: 'ATLAS_APIM_KEY', value: '@Microsoft.KeyVault(SecretUri=${apimKeySecretUri})' }
       ]
     }
   }

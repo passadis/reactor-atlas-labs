@@ -327,6 +327,14 @@ class IncidentAgentRuntime:
             self.ops = OpsApiClient(
                 settings.ops_api_url, self.credential, scope=settings.ops_api_scope,
                 key_provider=(lambda: read_secret(key_uri, self.credential)) if key_uri else None)
+        # Phase 10: the gateway's workflows API (Logic Apps), same identity and key as the tools.
+        self.workflows: OpsApiClient | None = None
+        if settings.workflows_url:
+            key_uri = settings.apim_key_secret_uri
+            self.workflows = OpsApiClient(
+                settings.workflows_url, self.credential, scope=settings.ops_api_scope,
+                key_provider=(lambda: read_secret(key_uri, self.credential)) if key_uri else None,
+                timeout_s=30.0)
         # Phase 09: one tool description in APIM, every agent surface (atlas_common.tool_catalog).
         self.catalog: ToolCatalog | None = (
             ToolCatalog(settings.tool_catalog_url, self.credential, settings.ops_api_scope)
@@ -359,6 +367,8 @@ class IncidentAgentRuntime:
     async def close(self) -> None:
         if self.ops is not None:
             await self.ops.close()
+        if self.workflows is not None:
+            await self.workflows.close()
         await self.knowledge.close()
         await self.store.close()
         if self._owns_credential:

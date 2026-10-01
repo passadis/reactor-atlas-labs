@@ -99,6 +99,15 @@ param apimKeySecretUri string = ''
 @description('APIM MCP server whose tools/list supplies the tool descriptions. Empty: docstrings.')
 param toolCatalogUrl string = ''
 
+@description('APIM workflows API (Logic Apps). Empty: no approval workflow is started.')
+param workflowsUrl string = ''
+
+@description('Principal id of the Logic App identity: the only caller of the web approval callback.')
+param logicPrincipalId string = ''
+
+@description('Hostname of the Logic App: the only host a registered approval callback may point at.')
+param logicHost string = ''
+
 var commonEnv = [
   { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }
   { name: 'ATLAS_COSMOS_ENDPOINT', value: cosmosEndpoint }
@@ -263,6 +272,9 @@ resource webApp 'Microsoft.App/containerApps@2026-01-01' = {
             memory: '2Gi'
           }
           env: concat(commonEnv, [
+            // Phase 10: who may call /api/callbacks/approvals, and where a callback may point.
+            { name: 'ATLAS_LOGIC_PRINCIPAL_ID', value: logicPrincipalId }
+            { name: 'ATLAS_LOGIC_HOST', value: logicHost }
             { name: 'AZURE_CLIENT_ID', value: webIdentityClientId }
             { name: 'OTEL_SERVICE_NAME', value: 'atlas-web' }
             { name: 'ATLAS_ORCHESTRATOR_URL', value: 'https://${orchestratorAppName}.internal.${acaEnv.properties.defaultDomain}' }
@@ -389,6 +401,9 @@ resource orchestratorApp 'Microsoft.App/containerApps@2026-01-01' = {
             memory: '4Gi'
           }
           env: concat(commonEnv, [
+            // Phase 10: start the approval workflow through the gateway, and link to the console.
+            { name: 'ATLAS_WORKFLOWS_URL', value: workflowsUrl }
+            { name: 'ATLAS_CONSOLE_URL', value: 'https://${webAppName}.${acaEnv.properties.defaultDomain}' }
             { name: 'AZURE_CLIENT_ID', value: orchestratorIdentityClientId }
             { name: 'OTEL_SERVICE_NAME', value: 'atlas-orchestrator' }
             { name: 'ATLAS_COMMANDS_QUEUE', value: commandsQueueName }

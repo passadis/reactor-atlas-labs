@@ -24,7 +24,12 @@ from .models import Entitlement, Person
 APP_ROLE_ENGINEER = "Atlas.Engineer"
 APP_ROLE_APPROVER = "Atlas.Approver"
 APP_ROLE_READONLY = "Atlas.ReadOnly"
-APP_ROLES = (APP_ROLE_ENGINEER, APP_ROLE_APPROVER, APP_ROLE_READONLY)
+# Phase 10: the presenter's role, so a director-level plan (break-glass on a frozen service) can be
+# approved in the console. A director is an approver; narrowing ("act as") still lowers it to
+# manager for the Episode 2 refusal beat, or to readonly for Episode 4's unauthorized beat.
+APP_ROLE_DIRECTOR = "Atlas.Director"
+APP_ROLES = (APP_ROLE_ENGINEER, APP_ROLE_APPROVER, APP_ROLE_READONLY, APP_ROLE_DIRECTOR)
+APPROVER_ROLES = frozenset({APP_ROLE_APPROVER, APP_ROLE_DIRECTOR})
 
 # Persona roles ordered by privilege. Narrowing moves left, never right.
 PERSONA_ORDER = ("readonly", "engineer", "sre", "manager", "director")
@@ -49,6 +54,8 @@ def default_persona_role(app_roles: Iterable[str]) -> str:
     as readonly. A user with no ATLAS app role at all gets readonly: least privilege by default.
     """
     roles = set(app_roles)
+    if APP_ROLE_DIRECTOR in roles:
+        return "director"
     if APP_ROLE_APPROVER in roles:
         return "manager"
     if APP_ROLE_ENGINEER in roles:
@@ -85,8 +92,8 @@ def can_approve(
     blast_radius: int,
 ) -> Decision:
     """May this user approve a plan of this risk, on a service of this tier, with this reach?"""
-    if APP_ROLE_APPROVER not in set(app_roles):
-        return Decision(False, "the Atlas.Approver app role is required")
+    if not APPROVER_ROLES & set(app_roles):
+        return Decision(False, "the Atlas.Approver (or Atlas.Director) app role is required")
     if entitlement is None:
         return Decision(False, "no entitlement found for this persona")
     if risk not in entitlement.may_approve_risk:

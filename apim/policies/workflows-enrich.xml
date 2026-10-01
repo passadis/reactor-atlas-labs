@@ -1,0 +1,50 @@
+<!--
+  GET /workflows/enrich?service_id=...&window_minutes=... -> the enrich-incident workflow.
+
+  A GET with typed query parameters, so the MCP tool built on it (enrich_incident) has a real input
+  schema; this turns it into the POST body the workflow's Request trigger expects. The service id
+  is checked here too - the workflow interpolates it into gateway URLs.
+-->
+<policies>
+  <inbound>
+    <base />
+    <choose>
+      <when condition="@(!System.Text.RegularExpressions.Regex.IsMatch(context.Request.Url.Query.GetValueOrDefault(&quot;service_id&quot;, &quot;&quot;), &quot;^svc-[a-z0-9-]{1,60}$&quot;))">
+        <return-response>
+          <set-status code="400" reason="Bad Request" />
+          <set-header name="Content-Type" exists-action="override">
+            <value>application/json</value>
+          </set-header>
+          <set-body>@(new JObject(
+              new JProperty("code", "invalid_request"),
+              new JProperty("message", "service_id must be an exact catalogue id, for example svc-payments."),
+              new JProperty("correlation_id", (string)context.Variables.GetValueOrDefault("correlation-id", ""))
+          ).ToString())</set-body>
+        </return-response>
+      </when>
+    </choose>
+    <set-method>POST</set-method>
+    <set-header name="Content-Type" exists-action="override">
+      <value>application/json</value>
+    </set-header>
+    <set-body>@{
+        int window;
+        if (!int.TryParse(context.Request.Url.Query.GetValueOrDefault("window_minutes", "60"), out window)) { window = 60; }
+        return new JObject(
+            new JProperty("service_id", context.Request.Url.Query.GetValueOrDefault("service_id", "")),
+            new JProperty("window_minutes", Math.Max(5, Math.Min(window, 1440)))
+        ).ToString();
+    }</set-body>
+    <rewrite-uri template="/api/enrich-incident/triggers/When_enrichment_is_requested/invoke?api-version=2022-05-01"
+        copy-unmatched-params="false" />
+  </inbound>
+  <backend>
+    <base />
+  </backend>
+  <outbound>
+    <base />
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>
