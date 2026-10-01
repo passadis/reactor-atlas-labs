@@ -198,6 +198,10 @@ eval: ## Run the evaluation suite and write a scorecard (Phase 12)
 redteam: ## Run the AI Red Teaming scan (Phase 12; eastus2/northcentralus only)
 	$(call PENDING,Phase 12 - evaluation)
 
+.PHONY: probe-scenarios
+probe-scenarios: ## Run the canonical incident and every staged scenario to the gate (SCENARIO=key for one)
+	uv run python -m scripts.probe_scenarios $(SCENARIO)
+
 # ---------------------------------------------------------------- Phase 11 --
 .PHONY: trace-check
 trace-check: ## Print one case's waterfall and assert it spans every hop: make trace-check CASE=<case_id>

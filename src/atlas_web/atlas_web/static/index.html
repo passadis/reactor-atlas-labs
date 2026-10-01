@@ -59,6 +59,10 @@
           <p>Describe an incident. Try:</p>
           <button class="example">Checkout is timing out for about 20% of EU customers since 14:05, started right after the payments deploy.</button>
           <button class="example">Is the service that caused this under a change freeze, and which team owns it?</button>
+          <p class="muted">Other incidents happening now (data/generators/scenarios.py):</p>
+          <button class="example" data-scenario="reporting-ttl">The internal reporting dashboards started returning 5xx errors at 13:50, a few minutes after a reporting cache change. It is the staging reporting service, no customer impact.</button>
+          <button class="example" data-scenario="search-flag">Search is returning errors and wrong results for about a third of users since 13:40, right after a feature-flag rollout. What is going on and what do we do?</button>
+          <button class="example" data-scenario="orders-stale">Order placement p95 latency has roughly tripled since 14:10. A change to the orders service went out at 14:02. Which runbook applies and what is the plan?</button>
         </div>
       </div>
       <form id="composer" class="composer" autocomplete="off">

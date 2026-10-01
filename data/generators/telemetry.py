@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from atlas_common.models import Incident, Service, TelemetryWindow
 
 from .changes import CANONICAL_SERVICE, canonical_incident_time
+from .scenarios import Scenario, scenario_window_offsets
 
 WINDOW_MINUTES = 5
 # Windows either side of an incident, so "before" and "after" are both visible.
@@ -74,8 +75,11 @@ def generate_telemetry(
     services: list[Service],
     incidents: list[Incident],
     reference: datetime,
+    staged: list[Scenario] | None = None,
+    staged_rng: random.Random | None = None,
 ) -> list[TelemetryWindow]:
-    """Build telemetry windows around every incident, plus the canonical demo signature."""
+    """Build telemetry windows around every incident, plus the canonical demo signature and the
+    staged scenarios' signatures (data/generators/scenarios.py)."""
     by_id = {s.service_id: s for s in services}
     windows: dict[tuple[str, datetime], TelemetryWindow] = {}
 
@@ -112,5 +116,19 @@ def generate_telemetry(
             windows[(service_id, start)] = _window(
                 service, start, rng, anomaly=offset >= 0, severity_factor=factor
             )
+
+    # -- the staged scenarios, from their own RNG stream ----------------------------------------
+    # Last, and never from `rng`: the canonical windows above must stay byte-identical whatever
+    # scenarios exist. Overwrites like the canonical signature does, for the same reason.
+    srng = staged_rng or random.Random(0)
+    for scenario in staged or []:
+        for signature in scenario.signatures:
+            service = by_id[signature.service_id]
+            for start, anomalous in scenario_window_offsets(
+                    scenario.incident_at(reference), WINDOW_MINUTES, WINDOWS_BEFORE,
+                    WINDOWS_AFTER):
+                windows[(signature.service_id, start)] = _window(
+                    service, start, srng, anomaly=anomalous,
+                    severity_factor=signature.severity_factor)
 
     return [windows[k] for k in sorted(windows)]

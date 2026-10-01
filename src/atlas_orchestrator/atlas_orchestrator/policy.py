@@ -46,6 +46,14 @@ def _tier_of(service_id: str, catalogue: dict[str, Service]) -> int:
     return int(service.tier) if service else 1
 
 
+_NO_ROLLBACK = frozenset({"", "none", "n/a", "na", "-", "not applicable", "no rollback"})
+
+
+def _has_rollback(rollback: str) -> bool:
+    """A rollback the step can actually be undone with, not a placeholder."""
+    return rollback.strip().strip(".").lower() not in _NO_ROLLBACK
+
+
 def _approver_roles(risk: str, tiers: set[int], blast_radius: int,
                     entitlements: dict[str, Entitlement]) -> list[str]:
     """Which seeded roles could approve this, from the entitlement table - never from the model."""
@@ -159,7 +167,18 @@ def evaluate(
         decision.reasons.append(
             f"blast radius {blast_radius} exceeds the {requester.max_blast_radius} that role "
             f"'{requester.role}' may act on unsupervised")
-    if destructive:
+    # A destructive step forces a human UNLESS the plan sits wholly inside rule 5's narrow door:
+    # low risk, every target a known non-production Tier 3/4 service, and every destructive step
+    # carrying a real rollback. That door never opens onto production (rule 5 checks it again), so
+    # "no destructive production action is ever auto-approved" holds by construction. Decided
+    # 2026-10-01: a reversible change to a staging service is what auto-approval is for.
+    reversible_non_prod = bool(destructive) and plan.risk == "low" and all(
+        s.target_service in catalogue
+        and catalogue[s.target_service].environment != "prod"
+        and catalogue[s.target_service].tier in AUTO_APPROVE_TIERS
+        and _has_rollback(s.rollback)
+        for s in destructive)
+    if destructive and not reversible_non_prod:
         decision.reasons.append(
             f"{len(destructive)} of {len(plan.steps)} steps are destructive "
             f"({', '.join(sorted({s.target_service for s in destructive}))})")
@@ -177,16 +196,20 @@ def evaluate(
         not decision.reasons
         and plan.risk == "low"
         and tiers <= AUTO_APPROVE_TIERS
-        and not destructive
+        and (not destructive or reversible_non_prod)
         and blast_radius <= AUTO_APPROVE_MAX_BLAST_RADIUS
+        and environments
         and "prod" not in environments
+        and all(t in catalogue for t in targets)
     )
     if auto_eligible:
         decision.auto_approved = True
         decision.approval_required = False
+        changes = (f"{len(destructive)} reversible destructive step(s), each with a rollback"
+                   if destructive else "no destructive step")
         decision.reasons.append(
-            f"auto-approved: low risk, Tier {sorted(tiers)}, no destructive step, blast radius "
-            f"{blast_radius}, environment {sorted(environments) or ['unknown']}")
+            f"auto-approved: low risk, Tier {sorted(tiers)}, {changes}, blast radius "
+            f"{blast_radius}, environment {sorted(environments)}")
         return decision
 
     # -- Rule 6: a human, named by the entitlement table, within a window -----------------------

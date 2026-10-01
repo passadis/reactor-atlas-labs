@@ -41,6 +41,7 @@ from .common import (
 from .incidents import generate_incidents
 from .people import generate_entitlements, generate_people
 from .runbooks import CANONICAL_RUNBOOK_ID, generate_runbooks, runbooks_by_service
+from .scenarios import scenario_rng, scenarios
 from .services import generate_services
 from .telemetry import generate_telemetry
 
@@ -54,7 +55,7 @@ EXPECTED_RUNBOOKS = 60
 EXPECTED_STALE_RUNBOOKS = 5
 EXPECTED_CANARIES = 2
 EXPECTED_INCIDENTS = 500
-EXPECTED_CHANGES = 300
+EXPECTED_CHANGES = 303  # 300 historical/canonical + one per staged scenario
 
 
 class GenerationError(RuntimeError):
@@ -111,12 +112,21 @@ def generate(seed: int, out_dir: Path, reference: datetime) -> dict[str, int]:
     _assert_graph(services)
 
     changes = generate_changes(rng, service_ids, reference)
+    # Historical incidents link to changes from the seeded stream ONLY. Indexing the staged
+    # scenarios' changes here would shift the RNG and rewrite incidents that tests and evaluation
+    # datasets cite by id (it did, the first time).
     changes_by_service: dict[str, list[str]] = {}
     for change in changes:
         changes_by_service.setdefault(change.service_id, []).append(change.change_id)
+    # Staged live scenarios (data/generators/scenarios.py): appended after the stream, so nothing
+    # that existed before shifts.
+    staged = scenarios(reference)
+    changes = sorted([*changes, *(s.change for s in staged)],
+                     key=lambda c: (c.deployed_at, c.change_id))
 
     incidents = generate_incidents(rng, service_ids, changes_by_service, reference)
-    telemetry = generate_telemetry(rng, services, incidents, reference)
+    telemetry = generate_telemetry(rng, services, incidents, reference, staged,
+                                   scenario_rng(seed))
     people = generate_people(rng)
     entitlements = generate_entitlements(rng)
 
@@ -134,6 +144,16 @@ def generate(seed: int, out_dir: Path, reference: datetime) -> dict[str, int]:
         raise GenerationError(f"expected {EXPECTED_CHANGES} changes, got {len(changes)}")
     if not any(c.change_id == CANONICAL_CHANGE_ID for c in changes):
         raise GenerationError(f"{CANONICAL_CHANGE_ID} missing; the demo depends on it")
+    runbook_ids = {fm.runbook_id for fm, _ in runbooks}
+    change_ids = [c.change_id for c in changes]
+    if len(change_ids) != len(set(change_ids)):
+        raise GenerationError("duplicate change ids; a staged scenario collides with the stream")
+    for scenario in staged:
+        if scenario.runbook_id not in runbook_ids:
+            raise GenerationError(f"scenario {scenario.key}: runbook {scenario.runbook_id} missing")
+        for sig in scenario.signatures:
+            if sig.service_id not in service_ids:
+                raise GenerationError(f"scenario {scenario.key}: unknown service {sig.service_id}")
     if not any(p.role == "readonly" for p in people):
         raise GenerationError("readonly persona missing; Episode 4 unauthorized evals need it")
 
@@ -179,6 +199,21 @@ def generate(seed: int, out_dir: Path, reference: datetime) -> dict[str, int]:
             "change_at": iso(canonical_change_time(reference)),
             "incident_at": iso(canonical_incident_time(reference)),
             "runbook_id": CANONICAL_RUNBOOK_ID,
+        },
+        "scenarios": {
+            s.key: {
+                "episode": s.episode,
+                "title": s.title,
+                "prompt": s.prompt,
+                "incident_at": iso(s.incident_at(reference)),
+                "change_id": s.change.change_id,
+                "change_service": s.change.service_id,
+                "change_at": iso(s.change.deployed_at),
+                "services": [sig.service_id for sig in s.signatures],
+                "runbook_id": s.runbook_id,
+                "expected_gate": s.expected_gate,
+            }
+            for s in staged
         },
         "injection_canaries": sorted(canaries),
         "stale_runbooks": stale_ids,

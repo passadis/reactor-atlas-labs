@@ -4,7 +4,7 @@ This is the module the whole approval story rests on, so it is tested three ways
 
 1. Table-driven over every rule, including the order they fire in.
 2. A property test over 1000 generated plans asserting the one invariant that must never break:
-   **no destructive production action is ever auto-approved.**
+   **no production action is ever auto-approved, and nothing irreversible is.**
 3. A structural test that the module cannot reach a model at all.
 
 No Azure, no model, no network.
@@ -77,11 +77,11 @@ ENTITLEMENTS = {
 
 
 def step(target: str = "svc-reporting", *, destructive: bool = False,
-         order: int = 1) -> RemediationStep:
+         order: int = 1, rollback: str = "Re-enable the flag") -> RemediationStep:
     return RemediationStep(
         order=order, action="Disable the offending feature flag", target_service=target,
         command_ref="RB-0042#3", destructive=destructive,
-        expected_result="Latency returns to baseline", rollback="Re-enable the flag",
+        expected_result="Latency returns to baseline", rollback=rollback,
     )
 
 
@@ -286,10 +286,38 @@ def test_the_narrow_auto_approval_door() -> None:
     assert decision.reasons and "auto-approved" in decision.reasons[0]
 
 
+def test_a_reversible_change_to_a_staging_service_is_auto_approved() -> None:
+    """Decided 2026-10-01: auto-approval exists for exactly this - low risk, non-prod, undoable."""
+    decision = gate(plan(step("svc-sandbox", destructive=True), risk="low"),
+                    requester="engineer", blast_radius=1)
+    assert decision.auto_approved is True, decision.reasons
+    assert "1 reversible destructive step(s)" in decision.reasons[0]
+
+
+@pytest.mark.parametrize("rollback", ["None", "n/a", "", " none. "])
+def test_a_destructive_staging_step_without_a_real_rollback_needs_a_human(rollback: str) -> None:
+    decision = gate(plan(step("svc-sandbox", destructive=True, rollback=rollback), risk="low"),
+                    requester="engineer", blast_radius=1)
+    assert decision.auto_approved is False and decision.approval_required is True
+
+
+def test_a_destructive_step_in_production_is_never_waved_through_by_low_risk() -> None:
+    decision = gate(plan(step("svc-reporting", destructive=True), risk="low"),
+                    requester="engineer", blast_radius=1)
+    assert decision.auto_approved is False
+    assert any("destructive" in r for r in decision.reasons)
+
+
+def test_one_production_step_closes_the_door_for_the_whole_plan() -> None:
+    decision = gate(plan(step("svc-sandbox", destructive=True, order=1),
+                         step("svc-reporting", order=2), risk="low"),
+                    requester="engineer", blast_radius=1)
+    assert decision.auto_approved is False
+
+
 @pytest.mark.parametrize(("target", "risk", "destructive", "blast", "why"), [
     ("svc-sandbox", "medium", False, 1, "risk is not low"),
     ("svc-checkout-api", "low", False, 1, "Tier 1 target"),
-    ("svc-sandbox", "low", True, 1, "destructive"),
     ("svc-sandbox", "low", False, 9, "blast radius too wide"),
     ("svc-reporting", "low", False, 1, "production environment"),
 ])
@@ -421,12 +449,16 @@ def test_no_destructive_production_action_is_ever_auto_approved() -> None:
 
         if not decision.auto_approved:
             continue
-        destructive = any(s.destructive for s in candidate.steps)
-        in_prod = any(CATALOGUE[s.target_service].environment == "prod"
-                      for s in candidate.steps if s.target_service in CATALOGUE)
-        if destructive or in_prod:
+        # The invariant, exactly: an auto-approved plan touches no production service at all, and
+        # every destructive step in it can be undone (decided 2026-10-01; before that, no
+        # destructive step of any kind could be auto-approved).
+        in_prod = any(s.target_service not in CATALOGUE
+                      or CATALOGUE[s.target_service].environment == "prod"
+                      for s in candidate.steps)
+        irreversible = any(s.destructive and not s.rollback.strip() for s in candidate.steps)
+        if in_prod or irreversible:
             violations.append(
-                f"auto-approved destructive={destructive} prod={in_prod} "
+                f"auto-approved prod={in_prod} irreversible={irreversible} "
                 f"risk={candidate.risk} targets={[s.target_service for s in candidate.steps]}")
 
     assert not violations, violations[:5]
