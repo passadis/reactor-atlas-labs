@@ -1689,3 +1689,37 @@ production step always needs a human whatever the grade says.
 | reporting-ttl | auto-approved, 3 of 3 runs | remediated 23-32 s after the gate, no human |
 | search-flag | SRE first | injection in RB-0029 noticed (`embedded_instructions_found`) |
 | orders-stale | manager first | reason names the stale RB-0015 |
+
+### 19.4 The Approvals page read the wrong queue (fixed 2026-10-04)
+
+`/approvals` was the Phase 04 console: it read `/api/approvals`, the chat path's `plan.status =
+'awaiting_approval'` rows, which the v1 triage agent no longer produces - so the page was always
+empty while workflow cases sat in `/api/workflow/approvals`, which no page showed. The Episode 2
+kill-and-resume beat ("approve from the console while the orchestrator is down") had no console.
+
+Now the page reads the workflow queue, and the web makes two decisions itself:
+
+- **Orchestrator unreachable:** the queue is read straight from Cosmos (`kind: 'approval'` rows),
+  and a decision is QUEUED - the row goes to `status: answered` with the answer, by a conditional
+  (etag) replace that loses cleanly to a racing answer. That is exactly what the orchestrator's own
+  `record_answer` writes and what its startup sweep reads. Measured live: queued answer, 7 s
+  restart, sweep resumed the case from its checkpoint, remediation succeeded 57 s later.
+- **Who may sign is checked early with the gate's own answer.** Entitlements alone said a manager
+  could approve the canonical plan (high risk, Tier 1, radius 10 <= 15); the gate had named only
+  `director` (break glass). The web now refuses roles the gate did not name - the same check the
+  orchestrator makes - so the console never says "queued" for an answer the sweep would refuse.
+
+### 19.5 Replica ranges drifted from the template (found 2026-10-04)
+
+All three apps had been set to min 0 / max 3 in the portal (2026-10-02 20:21 UTC) to save cost,
+and later to 1-3 for build days; the template still said 2-10 / 2-10 / 1-5, so the next
+`azd provision` would have silently reverted the presenter's choice. Visible symptoms while at 0:
+a dropped SSE stream, a case that never ran (cold start), and the worker's revision
+`ScaledToZero`. The template now has a `scaleProfile` parameter (`ATLAS_SCALE_PROFILE`): `idle`
+0-3, `work` 1-3 (default, matches the live state), `show` 2-10 / 2-10 / 1-5. `make scale
+PROFILE=show` the day before an episode. `kill_orchestrator.sh --scale-zero` restores the range it
+found instead of a hard-coded 2-10.
+
+Not yet proven: in `idle`, waking the worker from zero depends on KEDA reading the queue depth with
+the worker identity's Receiver role; the Service Bus scaler may need management rights. Verify
+before relying on `idle` with remediation.

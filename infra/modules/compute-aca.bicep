@@ -79,6 +79,27 @@ param orchestratorImage string = ''
 @description('Last deployed worker image; empty until the first azd deploy.')
 param workerImage string = ''
 
+// Replica ranges per profile (decided 2026-10-04). `work` is what the presenter set in the portal
+// for build days; `idle` scales everything to zero between sessions (cold starts, and approved
+// remediations wait for KEDA to wake the worker); `show` is the always-warm Episode setting:
+// switch to it the day before a session - `azd env set ATLAS_SCALE_PROFILE show && azd provision`.
+@allowed(['idle', 'work', 'show'])
+param scaleProfile string = 'work'
+
+var replicaRanges = {
+  idle: { web: [0, 3], orchestrator: [0, 3], worker: [0, 3] }
+  work: { web: [1, 3], orchestrator: [1, 3], worker: [1, 3] }
+  show: { web: [2, 10], orchestrator: [2, 10], worker: [1, 5] }
+}
+var replicas = replicaRanges[scaleProfile]
+
+// Explicit, because the portal writes it explicitly too: without it a Bicep provision and a portal
+// edit disagree about the rule list. Ten concurrent requests per replica, the ACA default.
+var httpScaleRule = {
+  name: 'http-scaler'
+  http: { metadata: { concurrentRequests: '10' } }
+}
+
 // ACR names: alphanumeric only, no hyphens.
 var acrName = take('${abbrs.containerRegistryRegistry}atlas${resourceToken}', 50)
 var envName = '${abbrs.appManagedEnvironment}-atlas-${resourceToken}'
@@ -309,10 +330,11 @@ resource webApp 'Microsoft.App/containerApps@2026-01-01' = {
           ]
         }
       ]
-      // Min 2: never cold-start during a demo.
+      // `show` keeps two warm replicas: never cold-start during a demo (see scaleProfile).
       scale: {
-        minReplicas: 2
-        maxReplicas: 10
+        minReplicas: replicas.web[0]
+        maxReplicas: replicas.web[1]
+        rules: [httpScaleRule]
       }
     }
   }
@@ -439,8 +461,9 @@ resource orchestratorApp 'Microsoft.App/containerApps@2026-01-01' = {
         }
       ]
       scale: {
-        minReplicas: 2
-        maxReplicas: 10
+        minReplicas: replicas.orchestrator[0]
+        maxReplicas: replicas.orchestrator[1]
+        rules: [httpScaleRule]
       }
     }
   }
@@ -487,8 +510,8 @@ resource workerApp 'Microsoft.App/containerApps@2026-01-01' = {
         }
       ]
       scale: {
-        minReplicas: 1
-        maxReplicas: 5
+        minReplicas: replicas.worker[0]
+        maxReplicas: replicas.worker[1]
         rules: [
           {
             // KEDA scales on queue depth using the worker's own identity. No connection string.

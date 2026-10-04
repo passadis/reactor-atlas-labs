@@ -148,6 +148,51 @@ class CaseStore:
             return None
         return {k: v for k, v in rows[0].items() if not k.startswith("_")}
 
+    # -- workflow approvals, read and answered without the orchestrator --------------------------
+    #
+    # The orchestrator owns these rows (`atlas_orchestrator.store`: `kind: "approval"`, id
+    # `approval:<case>`). The web reads them directly so the approval console still works while the
+    # orchestrator is down - the Episode 2 kill-and-resume beat - and can QUEUE an answer the same
+    # way the orchestrator's `record_answer` does: status `answered` plus the answer. The startup
+    # sweep then resumes the case and re-validates role, plan and expiry through the policy code.
+
+    async def list_workflow_approvals(self, limit: int = 50) -> list[dict[str, Any]]:
+        rows = await self._store.query(
+            CASES,
+            "SELECT TOP @n * FROM c WHERE c.kind = 'approval' AND c.status IN ('pending', "
+            "'answered') ORDER BY c.created_at DESC",
+            [{"name": "@n", "value": limit}],
+        )
+        return [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows]
+
+    async def queue_workflow_answer(self, case_id: str, answer: dict[str, Any]) -> bool:
+        """Record an answer for the startup sweep. False if the row is not pending any more.
+
+        Conditional on the row's etag: an answer that raced another one (or the orchestrator coming
+        back and resolving the case) loses cleanly instead of overwriting it.
+        """
+        rows = await self._store.query(
+            CASES, "SELECT * FROM c WHERE c.id = @id AND c.kind = 'approval'",
+            [{"name": "@id", "value": f"approval:{case_id}"}], partition_key=case_id,
+        )
+        if not rows or rows[0].get("status") != "pending":
+            return False
+        row = rows[0]
+        body = {k: v for k, v in row.items() if not k.startswith("_")}
+        body.update(status="answered", answer=answer, answered_via="web-queued",
+                    updated_at=_now())
+        container = self._store.container(CASES)
+
+        async def replace() -> bool:
+            try:
+                await container.replace_item(row["id"], body, etag=row["_etag"],
+                                             match_condition=MatchConditions.IfNotModified)
+            except ResourceModifiedError:
+                return False
+            return True
+
+        return cast(bool, await with_timeout(replace(), "Cosmos cases"))
+
     async def list_awaiting_approval(self, limit: int = 50) -> list[dict[str, Any]]:
         rows = await self._store.query(
             CASES,

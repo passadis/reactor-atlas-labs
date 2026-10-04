@@ -50,7 +50,7 @@ from atlas_agent.instructions import KNOWN_VERSIONS
 from atlas_agent.streaming import UiEvent
 from atlas_common.auth import SCOPE_FOUNDRY
 from atlas_common.config import Settings, load_local_env
-from atlas_common.entitlements import can_approve, can_chat
+from atlas_common.entitlements import Decision, can_approve, can_chat
 from atlas_common.repositories import EntitlementRepository, RepositoryUnavailableError
 from atlas_common.telemetry import (
     bound,
@@ -222,6 +222,27 @@ async def actor_for(
 
 
 ActorDep = Annotated[Actor, Depends(actor_for)]
+
+NO_ORCHESTRATOR_OR_STORE = "I could not reach the orchestrator or the case store."
+
+
+def may_approve_workflow(actor: Actor, row: dict[str, Any]) -> Decision:
+    """The same checks the orchestrator makes, made early so the console tells the truth.
+
+    Entitlements first (the Phase 04 `can_approve`), then the gate's own answer: when the
+    policy named roles, only those roles may sign - a manager cannot approve break glass.
+    """
+    decision = can_approve(
+        actor.principal.app_roles, actor.entitlement,
+        risk=str(row.get("risk") or "high"),
+        tier=1 if row.get("required_roles") else 3,
+        blast_radius=int(row.get("blast_radius") or 0),
+    )
+    required = [str(r) for r in row.get("required_roles") or []]
+    if decision.allowed and required and actor.persona_role not in required:
+        return Decision(False, f"this plan needs {' or '.join(required)}; you are acting as "
+                               f"{actor.persona_role}")
+    return decision
 
 
 class ChatRequest(BaseModel):
@@ -427,6 +448,22 @@ def _routes(app: FastAPI) -> None:
             raise HTTPException(503, "The workflow orchestrator is not configured.")
         return url
 
+    async def _pending_approvals(request: Request) -> tuple[list[dict[str, Any]], str]:
+        """Pending workflow approvals: the orchestrator's answer, or Cosmos if it is down."""
+        orchestrator_url()
+        state = atlas(request)
+        try:
+            response = await state.orchestrator.get("/approvals")
+            response.raise_for_status()
+            return list(response.json().get("pending", [])), "orchestrator"
+        except httpx.HTTPError:
+            log.warning("orchestrator unreachable; reading the approval queue from Cosmos")
+        try:
+            return await state.cases.list_workflow_approvals(), "store"
+        except RepositoryUnavailableError as exc:
+            raise HTTPException(503, NO_ORCHESTRATOR_OR_STORE) from exc
+
+
     @app.post("/api/workflow", status_code=202)
     async def start_case(body: WorkflowRequest, request: Request,
                          actor: ActorDep) -> dict[str, Any]:
@@ -486,14 +523,18 @@ def _routes(app: FastAPI) -> None:
     # order, so a parameterised route above this one would swallow "approvals"
     # and answer "No case approvals." - which it did.
     @app.get("/api/workflow/approvals")
-    async def workflow_approvals(request: Request, _: ActorDep) -> dict[str, Any]:
-        orchestrator_url()
-        try:
-            response = await atlas(request).orchestrator.get("/approvals")
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise HTTPException(503, "I could not reach the workflow orchestrator.") from exc
-        return dict(response.json())
+    async def workflow_approvals(request: Request, actor: ActorDep) -> dict[str, Any]:
+        """The approval console's queue, with what THIS signed-in user may do about each row.
+
+        From the orchestrator when it is up; straight from Cosmos when it is not, so the queue -
+        and approving into it - survives the Episode 2 kill window (`source` says which).
+        """
+        rows, source = await _pending_approvals(request)
+        for row in rows:
+            row["decision"] = may_approve_workflow(actor, row).__dict__
+            row["queued"] = row.get("status") == "answered"
+        return {"pending": rows, "count": len(rows), "source": source,
+                "orchestrator_up": source == "orchestrator"}
 
     @app.get("/api/workflow/graph")
     async def workflow_graph(request: Request, _: ActorDep,
@@ -555,40 +596,51 @@ def _routes(app: FastAPI) -> None:
         """
         orchestrator_url()
         state = atlas(request)
-        try:
-            pending = (await state.orchestrator.get("/approvals")).json()
-        except httpx.HTTPError as exc:
-            raise HTTPException(503, "I could not reach the workflow orchestrator.") from exc
-        row = next((p for p in pending.get("pending", []) if p.get("case_id") == case_id), None)
+        rows, source = await _pending_approvals(request)
+        row = next((p for p in rows if p.get("case_id") == case_id
+                    and p.get("status", "pending") == "pending"), None)
         if row is None:
             raise HTTPException(404, f"No approval is pending for {case_id}.")
 
-        decision = can_approve(
-            actor.principal.app_roles, actor.entitlement,
-            risk=str(row.get("risk") or "high"),
-            tier=1 if row.get("required_roles") else 3,
-            blast_radius=int(row.get("blast_radius") or 0),
-        )
+        decision = may_approve_workflow(actor, row)
         if not decision.allowed:
             log.warning("approval refused for %s by %s: %s", case_id,
                         actor.principal.email, decision.reason)
             raise HTTPException(403, decision.reason)
 
-        path = "approve" if body.decision == "approve" else "reject"
+        answer = {"approved": body.decision == "approve", "by": actor.principal.email,
+                  "role": actor.persona_role, "comment": body.comment,
+                  "at": datetime.now(UTC).isoformat()}
+        if source == "orchestrator":
+            path = "approve" if body.decision == "approve" else "reject"
+            try:
+                response = await state.orchestrator.post(
+                    f"/cases/{case_id}/{path}",
+                    json={"by": answer["by"], "role": answer["role"], "comment": body.comment},
+                    headers={"traceparent": current_traceparent() or ""},
+                    timeout=ORCHESTRATOR_TIMEOUT,
+                )
+            except httpx.HTTPError:
+                response = None  # went away between the read and the write: queue it below
+            if response is not None and response.status_code not in (502, 503, 504):
+                if response.status_code >= 400:
+                    raise HTTPException(response.status_code,
+                                        response.json().get("detail", "The orchestrator refused."))
+                return dict(response.json())
+
+        # The orchestrator is down (the Episode 2 kill window). Record the answer where its
+        # startup sweep looks; the sweep resumes the case and the policy code re-checks it.
         try:
-            response = await state.orchestrator.post(
-                f"/cases/{case_id}/{path}",
-                json={"by": actor.principal.email, "role": actor.persona_role,
-                      "comment": body.comment},
-                headers={"traceparent": current_traceparent() or ""},
-                timeout=ORCHESTRATOR_TIMEOUT,
-            )
-        except httpx.HTTPError as exc:
-            raise HTTPException(503, "I could not reach the workflow orchestrator.") from exc
-        if response.status_code >= 400:
-            raise HTTPException(response.status_code,
-                                response.json().get("detail", "The orchestrator refused."))
-        return dict(response.json())
+            queued = await state.cases.queue_workflow_answer(case_id, answer)
+        except RepositoryUnavailableError as exc:
+            raise HTTPException(503, NO_ORCHESTRATOR_OR_STORE) from exc
+        if not queued:
+            raise HTTPException(409, f"{case_id} is no longer waiting for an answer.")
+        log.info("orchestrator unreachable: %s answer for %s queued for the startup sweep",
+                 body.decision, case_id)
+        return {"case_id": case_id, "status": "queued", "queued": True,
+                "detail": "The orchestrator is not running. Your decision is recorded and the case "
+                          "resumes from its checkpoint when the orchestrator is back."}
 
     @app.get("/api/workflow/{case_id}/checkpoints")
     async def workflow_checkpoints(case_id: str, request: Request, _: ActorDep) -> dict[str, Any]:

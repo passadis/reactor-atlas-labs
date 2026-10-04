@@ -83,6 +83,10 @@ param enableSemanticCache bool = false
 @description('Record prompts and completions in traces (Phase 11). On in the demo env so Episode 4 can open a span and read what the agent saw; every process logs a loud warning at startup when it is on. The seeded data is synthetic.')
 param captureContent bool = true
 
+@description('Container Apps replica ranges: idle (0-3, between sessions), work (1-3, build days), show (always warm, episode days). See compute-aca.bicep.')
+@allowed(['idle', 'work', 'show'])
+param scaleProfile string = 'work'
+
 @description('Entra agent identity of the Foundry hosted agent; empty until its first deploy.')
 param hostedAgentPrincipalId string = ''
 
@@ -217,6 +221,7 @@ module computeAca './modules/compute-aca.bicep' = {
   name: 'compute-aca'
   scope: rg
   params: {
+    scaleProfile: scaleProfile
     captureContent: captureContent
     location: location
     tags: tags

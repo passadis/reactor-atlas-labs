@@ -33,6 +33,10 @@ echo "== killing $APP (revision $REV, $BEFORE replica(s)) =="
 START=$(date +%s)
 
 if [[ "$MODE" == "--scale-zero" ]]; then
+  # Restore whatever range was set before (the scale profile, API-NOTES 19.5), not a hard-coded one.
+  read -r MIN0 MAX0 < <(az containerapp show -g "$RG" -n "$APP" \
+    --query "[properties.template.scale.minReplicas, properties.template.scale.maxReplicas]" \
+    -o tsv 2>/dev/null | tr '\r\n' '  ')
   az containerapp update -g "$RG" -n "$APP" --min-replicas 0 --max-replicas 1 -o none
   echo "min-replicas set to 0 at $(date -u +%H:%M:%S); waiting for the scale-down cooldown"
   for _ in $(seq 1 90); do
@@ -41,7 +45,7 @@ if [[ "$MODE" == "--scale-zero" ]]; then
     [[ "${LEFT:-0}" == "0" ]] && break
     sleep 5
   done
-  az containerapp update -g "$RG" -n "$APP" --min-replicas 2 --max-replicas 10 -o none
+  az containerapp update -g "$RG" -n "$APP" --min-replicas "${MIN0:-1}" --max-replicas "${MAX0:-3}" -o none
 else
   az containerapp revision restart -g "$RG" -n "$APP" --revision "$REV" -o none
   echo "revision restarted at $(date -u +%H:%M:%S); every replica was terminated"
