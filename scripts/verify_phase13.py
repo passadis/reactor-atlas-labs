@@ -82,15 +82,24 @@ def gate() -> None:
 def rollback() -> None:
     from datetime import datetime
 
+    def ts(value: str) -> datetime:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+    # Timed from the job's start: the time GitHub keeps a run queued before a runner picks it up
+    # is outside our control (an Actions incident queued every run for 10+ minutes on
+    # 2026-10-05), so it is reported, not counted. On stage, `make restore-baseline` is the
+    # fallback when Actions is slow.
     run = last_run("rollback.yml")
-    took = None
+    took = queued = None
     if run:
-        took = (datetime.fromisoformat(run["updatedAt"].replace("Z", "+00:00"))
-                - datetime.fromisoformat(run["createdAt"].replace("Z", "+00:00"))).total_seconds()
+        job = gh("run", "view", str(run["databaseId"]), "--json", "jobs")["jobs"][0]
+        if job.get("startedAt") and job.get("completedAt"):
+            took = (ts(job["completedAt"]) - ts(job["startedAt"])).total_seconds()
+            queued = (ts(job["startedAt"]) - ts(run["createdAt"])).total_seconds()
     check("4 rollback.yml succeeded inside 180 s",
           run.get("conclusion") == "success" and took is not None and took < 180,
-          f"run {run.get('databaseId')}: {run.get('conclusion')}, {took and round(took)} s "
-          "(whole workflow, runner start included)")
+          f"run {run.get('databaseId')}: {run.get('conclusion')}, job {took and round(took)} s "
+          f"(runner start included; {queued and round(queued)} s queued before it, not counted)")
 
 
 def eval_required() -> None:

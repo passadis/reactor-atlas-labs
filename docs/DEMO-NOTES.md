@@ -1076,3 +1076,57 @@ make verify-phase12
 
 Everything on stage is a file in `evals/reports/` - committed, readable offline. Never start an
 evaluation live; at most re-run `make eval-local` on a recorded run (seconds).
+
+## Phase 13 - The quality gate, the regression kit and rollback (Episode 4)
+
+### What was built
+
+| Piece | What it does |
+|---|---|
+| `evals/gate.py` (`make gate VERSION=good\|bad\|<n>`) | Evaluate-only. Sends the 18 runnable holdout cases to one ALREADY-DEPLOYED hosted-agent version (`agent_reference.version`), records every turn, scores it with the deterministic checks and the Foundry judges, and compares it with the thresholds and the last green baseline. It never builds, deploys or moves the pin. |
+| Hosted agent versions | **7 = good** (pinned, serves the demo). **8 = bad**: the same code, forced onto instructions v0. Named in `evals/agent_versions.yaml`. |
+| Regression kit (`make inject NAME=... ACTION=apply\|revert\|status`) | Five reversible breakages: `bad_tool_description`, `weak_instructions`, `latency` (4 s per ops API call), `stale_knowledge`, `prompt_injection`. Each is a data or config write, never a deploy. |
+| `make restore-baseline` | Reverts all five, pins the good version, runs the smoke check. |
+| `make smoke` | 5 checks: web health, every injection at baseline, instructions pointer, pinned version, empty DLQ. |
+| GitHub Actions (private repo `passadis/reactor-atlas-labs`, OIDC only, no secrets) | `ci.yml` (lint, types, tests, APIM policy XML, "changed instructions need a new evaluation"), `agent-quality-gate.yml` (the gate, evaluate-only), `rollback.yml` (pin flip + smoke, under 3 min), `nightly-restore.yml` (03:00 apply-all then restore, refuses within 6 h of an episode). |
+| `docs/AGENT-GOVERNANCE.md`, `docs/CHANGELOG-agent.md` | Who may change what, and every agent change with the evaluation that measured it. |
+
+### The numbers (2026-10-05)
+
+| Version | Gate | Composite | Deterministic | Why |
+|---|---|---|---|---|
+| 7 (good) | **PASS** | 0.975 (baseline) | 18/18 | every threshold met |
+| 8 (bad) | **FAIL** | 0.964 | 16/18 | prompt_injection 2/3 < 100 % |
+
+Latency injection measured live: a guarded ops API call 150 ms before, 4,100 ms on, 110-180 ms
+after the revert, each within 10 s.
+
+### What to show
+
+1. `evals/reports/gate-bad.md` - the red FAIL, and the one line that matters: prompt injection.
+   The composite only moved 0.011; the category gate is what catches it.
+2. `evals/reports/gate-good.md` - the same gate, the good version, PASS.
+3. The GitHub Actions page - a completed gate run (red X) and a rollback run with its timing.
+   Show runs that already happened (CLAUDE.md 9.2).
+4. `make inject NAME=weak_instructions ACTION=apply`, ask the app the search-flag prompt, then
+   `make restore-baseline` - break it and heal it in under a minute, no deploy.
+5. `docs/AGENT-GOVERNANCE.md` - one page: what the model may decide and what it never may.
+
+### Commands
+
+```bash
+make gate VERSION=bad             # ~15 min (agent turns + judges) - day before, never live
+make gate VERSION=good
+uv run python -m evals.gate --version bad --rescore <run_id>   # re-score a recording, ~1 min
+make inject NAME=latency ACTION=apply   # then ACTION=revert
+make restore-baseline             # under a minute
+make smoke
+make verify-phase13
+```
+
+### Fallback
+
+- Gate: the committed reports in `evals/reports/gate-*.md`. Never wait on a live gate run.
+- Rollback: if GitHub Actions is slow or down (an Actions incident queued every run for 10+
+  minutes on 2026-10-05), `make restore-baseline` from the laptop does the same pin flip and smoke.
+- Any injection left applied: `make restore-baseline`, then `make smoke` shows 5/5.
