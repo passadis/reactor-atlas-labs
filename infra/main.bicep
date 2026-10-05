@@ -87,6 +87,9 @@ param captureContent bool = true
 @allowed(['idle', 'work', 'show'])
 param scaleProfile string = 'work'
 
+@description('Object id of the GitHub Actions service principal (Phase 13, scripts/github_oidc.sh). Empty: no CI assignments.')
+param ciPrincipalId string = ''
+
 @description('Entra agent identity of the Foundry hosted agent; empty until its first deploy.')
 param hostedAgentPrincipalId string = ''
 
@@ -370,6 +373,8 @@ module rbac './modules/rbac.bicep' = {
   name: 'rbac'
   scope: rg
   params: {
+    ciPrincipalId: ciPrincipalId
+    apimName: apim.outputs.apimName
     foundryAccountName: foundry.outputs.accountName
     foundryProjectName: foundry.outputs.projectName
     foundryProjectPrincipalId: foundry.outputs.projectPrincipalId

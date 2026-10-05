@@ -1,0 +1,99 @@
+# The agent quality gate - evaluate-only (CLAUDE.md 9.2). It never builds or deploys: it evaluates
+# a hosted-agent version that is ALREADY deployed (by number, or `good` / `bad` from
+# evals/agent_versions.yaml) on the held-out dataset, and blocks on evals/thresholds.yaml and the
+# last green baseline. On stage, show a run that already happened; never wait on a live one.
+name: agent-quality-gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Hosted agent version to evaluate (number, or good / bad)"
+        required: true
+        default: good
+      promote:
+        description: "On PASS, pin the endpoint to this version and tag a release"
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - "src/atlas_agent/atlas_agent/instructions/**"
+      - "apim/mcp/**"
+      - "evals/thresholds.yaml"
+
+permissions:
+  id-token: write   # OIDC to Azure; no secrets
+  contents: write   # the release tag on promote
+
+concurrency:
+  group: agent-quality-gate
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    environment: atlas
+    timeout-minutes: 120
+    outputs:
+      passed: ${{ steps.gate.outputs.passed }}
+      version: ${{ steps.gate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: astral-sh/setup-uv@v6
+      - name: Python and the azd environment (identifiers only)
+        env:
+          ATLAS_ENV_FILE: ${{ vars.ATLAS_ENV_FILE }}
+        run: |
+          uv python install 3.13
+          uv sync --python 3.13 --group dev --group evals --locked
+          echo "$ATLAS_ENV_FILE" >> "$GITHUB_ENV"
+      - name: Evaluate the deployed version (evaluate-only)
+        id: gate
+        env:
+          VERSION: ${{ github.event.inputs.version || 'good' }}
+        run: uv run python scripts/ci_gate_step.py "$VERSION"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-scorecard
+          path: |
+            evals/results/gate-*/gate.md
+            evals/results/gate-*/scorecard.json
+            evals/results/gate-*/scorecard.md
+            evals/results/gate-*/responses.jsonl
+
+  promote:
+    needs: gate
+    if: needs.gate.outputs.passed == 'true' && github.event.inputs.promote == 'true'
+    runs-on: ubuntu-latest
+    environment: atlas
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: astral-sh/setup-uv@v6
+      - env:
+          ATLAS_ENV_FILE: ${{ vars.ATLAS_ENV_FILE }}
+        run: |
+          uv python install 3.13
+          uv sync --python 3.13 --group dev --locked
+          echo "$ATLAS_ENV_FILE" >> "$GITHUB_ENV"
+      - name: Pin the endpoint to the evaluated version (a pointer flip, not a deploy)
+        run: uv run python -m scripts.hosted_agent pin "${{ needs.gate.outputs.version }}"
+      - name: Tag the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: agent-v${{ needs.gate.outputs.version }}
+        run: |
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" \
+            --notes "Promoted by the evaluate-only quality gate, run ${{ github.run_id }}."

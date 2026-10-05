@@ -79,6 +79,12 @@ param principalId string = ''
 @description('Principal type of the human operator.')
 param principalType string = 'User'
 
+@description('Object id of the GitHub Actions service principal (OIDC, no secret). Empty disables its assignments. Phase 13: scripts/github_oidc.sh creates it.')
+param ciPrincipalId string = ''
+
+@description('APIM instance name (the CI identity may edit one MCP tool description: the regression kit).')
+param apimName string = ''
+
 // ---------------------------------------------------------------------------- role ids --
 
 var roles = {
@@ -110,6 +116,7 @@ var cosmosDataContributorRoleId = '00000000-0000-0000-0000-000000000002'
 var cosmosDataReaderRoleId = '00000000-0000-0000-0000-000000000001'
 
 var hasOperator = !empty(principalId)
+var hasCi = !empty(ciPrincipalId)
 
 // ---------------------------------------------------------------------------- existing refs --
 
@@ -646,5 +653,78 @@ resource cosmosAccountReaders 'Microsoft.Authorization/roleAssignments@2022-04-0
     }
   }
 ]
+
+// ---------------------------------------------------------------------- CI identity (Phase 13) --
+// GitHub Actions authenticates with OIDC as this service principal. What it needs, nothing more:
+// - the quality gate: Foundry User on the project (evaluations, invoking a hosted-agent version);
+// - rollback and restore: Foundry Project Manager on the project (pin a hosted-agent version);
+// - the nightly apply/revert proof of the regression kit: Cosmos data (instructions pointer, chaos
+//   document), Search index data (two knowledge injections), APIM service contributor scoped to
+//   the one APIM instance (one MCP tool description), Service Bus reader (DLQ depth in the smoke).
+resource apim 'Microsoft.ApiManagement/service@2024-05-01' existing = if (hasCi && !empty(apimName)) {
+  name: apimName
+}
+
+resource ciFoundryUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (hasCi) {
+  name: guid(foundryProject.id, ciPrincipalId, roles.foundryUser)
+  scope: foundryProject
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.foundryUser)
+    principalId: ciPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource ciProjectManager 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (hasCi) {
+  name: guid(foundryProject.id, ciPrincipalId, roles.foundryProjectManager)
+  scope: foundryProject
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.foundryProjectManager)
+    principalId: ciPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource ciSearchIndexContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (hasCi) {
+  name: guid(search.id, ciPrincipalId, roles.searchIndexDataContributor)
+  scope: search
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.searchIndexDataContributor)
+    principalId: ciPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource ciApimContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (hasCi && !empty(apimName)) {
+  name: guid(resourceGroup().id, apimName, ciPrincipalId, 'apim-service-contributor')
+  scope: apim
+  properties: {
+    // API Management Service Contributor
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '312a565d-c81f-4fd8-895a-4e21e48d571c')
+    principalId: ciPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource ciSbReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (hasCi) {
+  name: guid(sbNamespace.id, ciPrincipalId, 'reader')
+  scope: sbNamespace
+  properties: {
+    // Reader: queue runtime counts through ARM, nothing on the data plane
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'acdd72a7-3385-48ef-bd42-f606fba81ae7')
+    principalId: ciPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource ciCosmosData 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2026-03-15' = if (hasCi) {
+  parent: cosmos
+  name: guid(cosmos.id, ciPrincipalId, cosmosDataContributorRoleId)
+  properties: {
+    roleDefinitionId: '${cosmos.id}/sqlRoleDefinitions/${cosmosDataContributorRoleId}'
+    principalId: ciPrincipalId
+    scope: cosmos.id
+  }
+}
 
 output assignmentSummary string = 'foundry=${length(foundryUserPrincipals)} search=${length(searchReaders)} cosmosData=${length(cosmosDataPrincipals)} acrPull=3 operator=${hasOperator}'

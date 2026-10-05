@@ -109,30 +109,46 @@ class ChaosSwitch:
     with no control-plane write, no stopped Function App and no cold start on the way back.
     The document always carries an expiry, so a forgotten switch turns itself off.
 
+    Two modes (Phase 13 added the second): `outage` (the default) answers 503; `latency` answers
+    normally after `latency_ms` - scripts/inject_latency.py, which makes the p95 alert and the
+    latency gate fire without breaking anything.
+
     Read at most every few seconds per worker. A failure to READ the switch is never an outage.
     """
 
     def __init__(self, store: Callable[[], Any], *, cache_s: float = CHAOS_CACHE_S) -> None:
         self._store, self._cache_s = store, cache_s
-        self._state: tuple[float, bool] | None = None
+        self._state: tuple[float, bool, float] | None = None
 
     async def active(self) -> bool:
+        """True while the switch is an outage."""
+        return (await self._read())[0]
+
+    async def delay_s(self) -> float:
+        """Seconds to wait before answering while the switch is in latency mode, else 0."""
+        return (await self._read())[1]
+
+    async def _read(self) -> tuple[bool, float]:
         now = time.monotonic()
         if self._state is not None and now - self._state[0] < self._cache_s:
-            return self._state[1]
-        on = False
+            return self._state[1], self._state[2]
+        on, delay = False, 0.0
         try:
             rows = await asyncio.wait_for(self._store().query(
                 CONTROL, "SELECT * FROM c WHERE c.id = @id",
                 [{"name": "@id", "value": CHAOS_DOC_ID}], partition_key=CHAOS_DOC_ID), 2.0)
             doc = rows[0] if rows else {}
             expires = doc.get("expires_at")
-            on = bool(doc.get("enabled")) and (
+            live = bool(doc.get("enabled")) and (
                 not expires or datetime.fromisoformat(str(expires)) > datetime.now(UTC))
+            if live and doc.get("mode") == "latency":
+                delay = min(float(doc.get("latency_ms") or 0) / 1000, 30.0)
+            else:
+                on = live
         except Exception:
             log.warning("chaos switch unreadable; treating as off", exc_info=True)
-        self._state = (now, on)
-        return on
+        self._state = (now, on, delay)
+        return on, delay
 
 
 async def guarded(cid: str, work: Callable[[], Awaitable[Result]], *,
@@ -143,6 +159,8 @@ async def guarded(cid: str, work: Callable[[], Awaitable[Result]], *,
         result.headers["x-atlas-chaos"] = "on"
         result.headers.setdefault("x-atlas-correlation-id", cid)
         return result
+    if chaos is not None and (delay := await chaos.delay_s()):
+        await asyncio.sleep(delay)  # latency mode: slow, never wrong
     try:
         async with asyncio.timeout(STORE_TIMEOUT_S * 3):
             result = await work()

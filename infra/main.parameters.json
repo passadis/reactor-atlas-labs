@@ -22,6 +22,7 @@
     "enableSemanticCache": { "value": "${ATLAS_ENABLE_SEMANTIC_CACHE=false}" },
     "captureContent": { "value": "${ATLAS_CAPTURE_CONTENT=true}" },
     "scaleProfile": { "value": "${ATLAS_SCALE_PROFILE=work}" },
+    "ciPrincipalId": { "value": "${ATLAS_CI_PRINCIPAL_ID=}" },
     "webAppClientId": { "value": "${ATLAS_WEB_APP_CLIENT_ID=}" },
     "gatewayAppClientId": {
       "value": "${ATLAS_GATEWAY_APP_CLIENT_ID=}"

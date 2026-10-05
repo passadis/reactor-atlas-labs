@@ -65,7 +65,9 @@ EXECUTION_EVALS = {"tool_call_accuracy", "tool_call_success", "tool_output_utili
 
 def criteria(mode: str, judge: str, names: list[str] | None = None) -> list[dict[str, Any]]:
     trace = "{{sample.output_items}}" if mode == "target" else "{{item.response}}"
-    text = "{{sample.output_text}}" if mode == "target" else "{{item.response_text}}"
+    # A hosted agent's target run leaves sample.output_text empty (measured 2026-10-05): the
+    # reply is the last output item, so text evaluators read the output items too.
+    text = "{{sample.output_items}}" if mode == "target" else "{{item.response_text}}"
     out = []
     for name in names or QUALITY + SAFETY:
         mapping: dict[str, str] = {"query": "{{item.query}}",
@@ -155,7 +157,9 @@ def collect(client: Any, eval_id: str, run_id: str) -> dict[str, Any]:
                                                         "reason")} | {
                                      "error": ((r.get("sample") or {}).get("error"))}
                                  for r in d.get("results") or []],
-                     "output_text": ((d.get("sample") or {}).get("output_text") or "")[:2000]})
+                     "output_text": ((d.get("sample") or {}).get("output_text") or "")[:2000],
+                     "output": (d.get("sample") or {}).get("output") or [],
+                     "latency_ms": (d.get("sample") or {}).get("latency_ms")})
     return {"eval_id": eval_id, "run_id": run.id, "status": run.status,
             "report_url": getattr(run, "report_url", None),
             "result_counts": run.result_counts.model_dump() if run.result_counts else None,
@@ -163,31 +167,84 @@ def collect(client: Any, eval_id: str, run_id: str) -> dict[str, Any]:
 
 
 def confirm_safety(mode: str, items: list[dict[str, Any]], cloud: dict[str, Any], name: str,
-                   agent_version: str | None) -> dict[str, Any]:
-    """Re-judge every safety failure once; it counts only if it reproduces.
+                   agent_version: str | None, gated: set[str] | None = None) -> dict[str, Any]:
+    """Re-judge every safety failure - and every failure of a gated quality evaluator - once; it
+    counts only if it reproduces.
 
     The content-safety judges are not deterministic: the same eight answers judged twice on
     2026-10-04 flipped two fails to passes (API-NOTES 20.5). A one-off flip should not decide a
     1.00 gate either way, so a failure is confirmed by a second, independent judgement. Target
     mode would re-invoke the agent (a new answer), so there the first judgement stands.
+    The quality judges flip the same way: three near-identical "hand this to a human" replies on
+    2026-10-05, two passed task_adherence and one failed (API-NOTES 21.4).
     """
+    scope = set(SAFETY) | ((gated or set()) & set(QUALITY))
     failing = sorted({(row["id"], r["name"]) for row in cloud["rows"] for r in row["results"]
-                      if r["name"] in SAFETY and r["passed"] is False})
+                      if r["name"] in scope and r["passed"] is False
+                      and (r["name"] in SAFETY or row.get("category") in TASK_CATEGORIES)})
     if not failing or mode == "target":
-        return {"rejudged": [], "confirmed": [list(f) for f in failing], "run_id": None}
+        return {"rejudged": [], "confirmed": [list(f) for f in failing], "run_id": None,
+                "scope": sorted(scope)}
     ids = {i for i, _ in failing}
     again = submit(mode, [i for i in items if i["id"] in ids], f"{name}-safety-confirm",
                    agent_version, names=sorted({n for _, n in failing}))
     second = {(row["id"], r["name"]) for row in again["rows"] for r in row["results"]
               if r["passed"] is False}
     return {"rejudged": [list(f) for f in failing],
-            "confirmed": [list(f) for f in failing if f in second], "run_id": again["run_id"]}
+            "confirmed": [list(f) for f in failing if f in second], "run_id": again["run_id"],
+            "scope": sorted(scope)}
+
+
+def records_from_target(rows: list[dict[str, Any]],
+                        cases: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Rebuild harness-style records from a target run, so the deterministic checks apply.
+
+    Each output message's content is a JSON list of parts: `function_call` (name, arguments),
+    `function_call_output` (results, in call order) and a final text part holding the
+    IncidentTriage JSON (shape measured 2026-10-05, API-NOTES 21.2).
+    """
+    records = []
+    for row in rows:
+        calls: list[dict[str, Any]] = []
+        outputs: list[Any] = []
+        text = ""
+        for message in row.get("output") or []:
+            try:
+                parts = json.loads(message.get("content") or "[]")
+            except (TypeError, ValueError):
+                parts = [{"text": message.get("content")}]
+            for part in parts if isinstance(parts, list) else [parts]:
+                kind = part.get("type")
+                if kind == "function_call":
+                    calls.append({"name": part.get("name"), "arguments": part.get("arguments")
+                                  or {}, "result": None, "injected_fault": False})
+                elif kind == "function_call_output":
+                    outputs.append(part.get("function_call_output"))
+                elif "text" in part:
+                    text = str(part.get("text") or "")
+        for call, result in zip(calls, outputs, strict=False):
+            call["result"] = result
+        try:
+            parsed = json.loads(text)
+            output = parsed if isinstance(parsed, dict) and "severity" in parsed else None
+        except ValueError:
+            output = None
+        case = cases[row["id"]]
+        records.append({"id": row["id"], "category": case["category"], "query": case["query"],
+                        "output": output,
+                        "failure": None if output else {"reason": "no_triage",
+                                                        "detail": text[:300]},
+                        "tool_calls": calls, "response_text": text,
+                        "latency_s": round((row.get("latency_ms") or 0) / 1000, 2)})
+    return records
 
 
 def pass_rates(rows: list[dict[str, Any]], categories: set[str] | None = None,
-               confirmed: set[tuple[str, str]] | None = None) -> dict[str, dict[str, Any]]:
-    """Pass rates per evaluator. Quality evaluators over `categories` only (when given); a safety
-    failure counts only if `confirmed` holds it (when given)."""
+               confirmed: set[tuple[str, str]] | None = None,
+               scope: set[str] | None = None) -> dict[str, dict[str, Any]]:
+    """Pass rates per evaluator. Quality evaluators over `categories` only (when given); a failure
+    of an evaluator in `scope` (default: safety) counts only if `confirmed` holds it."""
+    scope = scope or set(SAFETY)
     stats: dict[str, dict[str, int]] = {}
     for row in rows:
         for r in row["results"]:
@@ -196,7 +253,7 @@ def pass_rates(rows: list[dict[str, Any]], categories: set[str] | None = None,
                 or (r["name"] in EXECUTION_EVALS and row.get("category") == "tool_failure"))
             if out_of_scope:
                 continue
-            unconfirmed = confirmed is not None and r["name"] in SAFETY and (
+            unconfirmed = confirmed is not None and r["name"] in scope and (
                 r["passed"] is False and (row["id"], r["name"]) not in confirmed)
             if unconfirmed:
                 r = {**r, "passed": True}
@@ -223,14 +280,16 @@ def reviewed(confirmed: set[tuple[str, str]], reply_sha: dict[str, str]) -> list
 def scorecard(local: dict[str, Any], cloud: dict[str, Any], meta: dict[str, Any],
               thresholds: dict[str, Any], baseline: dict[str, Any] | None,
               reply_sha: dict[str, str] | None = None) -> dict[str, Any]:
-    confirmed = {tuple(f) for f in (cloud.get("safety_confirm") or {}).get("confirmed", [])}
+    confirm = cloud.get("safety_confirm") or {}
+    confirmed = {tuple(f) for f in confirm.get("confirmed", [])}
     applied = reviewed(confirmed, reply_sha or {})
     confirmed -= {(e["case"], e["evaluator"]) for e in applied}
-    evaluators = pass_rates(cloud["rows"], TASK_CATEGORIES, confirmed)
+    scope = set(confirm.get("scope") or SAFETY)  # runs before 2026-10-05 confirmed safety only
+    evaluators = pass_rates(cloud["rows"], TASK_CATEGORIES, confirmed, scope)
     all_rows = pass_rates(cloud["rows"])
     for name, v in evaluators.items():
         v["all_rows_pass_rate"] = all_rows.get(name, {}).get("pass_rate")
-    safety_fail = {i for i, _ in confirmed}
+    safety_fail = {i for i, n in confirmed if n in SAFETY}
     by_cat: dict[str, list[bool]] = {}
     for row in local["rows"]:
         ok = row["passed"] and row["id"] not in safety_fail
@@ -335,6 +394,7 @@ def main() -> int:
                         default=ROOT / "evals" / "datasets" / "atlas-eval-v1.jsonl")
     parser.add_argument("--agent-version", default=None, help="target mode: hosted agent version")
     parser.add_argument("--set-baseline", action="store_true")
+    parser.add_argument("--run-id", default=None, help="target mode: results folder name")
     parser.add_argument("--no-event", action="store_true")
     parser.add_argument("--attach", nargs=2, metavar=("EVAL_ID", "RUN_ID"),
                         help="collect an existing cloud run instead of starting one")
@@ -357,16 +417,22 @@ def main() -> int:
                   "response": r["response"], "response_text": r["response_text"],
                   "tool_definitions": cases[r["id"]]["tool_definitions"]} for r in records]
         local = local_evaluate(cases, records)
-        target = "atlas_agent (in-process, This app shape)"
+        agent_version = records[0].get("agent_version") if records else None
+        target = (f"hosted agent atlas-incident-agent:{agent_version}" if agent_version
+                  else "atlas_agent (in-process, This app shape)")
     else:
         rows = [json.loads(line) for line in args.dataset.read_text(encoding="utf-8")
                 .splitlines() if line.strip()]
         version = "hosted"
         dataset_name = "holdout" if "holdout" in args.dataset.name else "v1"
-        out_dir = RESULTS / f"{time.strftime('%Y%m%d-%H%M%S')}-target"
+        out_dir = RESULTS / (args.run_id or f"{time.strftime('%Y%m%d-%H%M%S')}-target")
         out_dir.mkdir(parents=True, exist_ok=True)
+        # A deployed agent's tools cannot be broken in-process: fault cases are harness-only.
+        skipped = [r["id"] for r in rows if r.get("fault")]
         items = [{"id": r["id"], "category": r["category"], "query": r["query"],
-                  "tool_definitions": r["tool_definitions"]} for r in rows]
+                  "tool_definitions": r["tool_definitions"]} for r in rows if not r.get("fault")]
+        if skipped:
+            print(f"target mode skips {len(skipped)} tool-fault case(s): {skipped}")
         local = None
         target = f"hosted agent atlas-incident-agent:{args.agent_version or 'latest'}"
 
@@ -383,12 +449,17 @@ def main() -> int:
     if "safety_confirm" not in cloud:
         cloud["safety_confirm"] = confirm_safety(args.mode, items, cloud,
                                                  f"atlas-{dataset_name}-{run_id}",
-                                                 args.agent_version)
+                                                 args.agent_version,
+                                                 set(thresholds.get("evaluators", {})))
     (out_dir / "cloud_results.json").write_text(json.dumps(cloud, indent=2))
-    if local is None:  # target mode: the deterministic checks need the harness's tool record
-        local = {"rows": [{"id": r["id"], "category": r["category"], "passed": True}
-                          for r in items], "cases": len(items), "passed": len(items),
-                 "pass_rate": 1.0, "latency_p95_s": 0.0}
+    if local is None:  # target mode: rebuild the tool record from Foundry's output items
+        records = records_from_target(cloud["rows"], cases)
+        (out_dir / "responses.jsonl").write_bytes("".join(
+            json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n" for r in records).encode())
+        local = local_evaluate(cases, records)
+        for i in items:
+            i["response_text"] = next((r["response_text"] for r in records if r["id"] == i["id"]),
+                                      "")
     baseline_path = BASELINES / f"{dataset_name}-{version}.json"
     baseline = json.loads(baseline_path.read_text()) if baseline_path.exists() else None
     meta = {"run_id": run_id, "mode": args.mode, "dataset": dataset_name,
@@ -401,9 +472,12 @@ def main() -> int:
     print((out_dir / "scorecard.md").read_text(encoding="utf-8"))
     if args.mode == "dataset":
         REPORTS.mkdir(parents=True, exist_ok=True)
-        (REPORTS / f"scorecard-{dataset_name}-{version}.md").write_text(
+        label = f"{version}-v{agent_version}" if agent_version else version
+        (REPORTS / f"scorecard-{dataset_name}-{label}.md").write_text(
             render(card, baseline), encoding="utf-8")
-    if args.set_baseline:
+    if args.set_baseline and not card["passed"]:
+        print("baseline NOT written: only a green run may become the baseline")
+    elif args.set_baseline:
         BASELINES.mkdir(parents=True, exist_ok=True)
         baseline_path.write_text(json.dumps(card, indent=2))
         print(f"baseline written: {baseline_path}")

@@ -223,6 +223,26 @@ scale: ## Set Container Apps replica ranges: make scale PROFILE=idle|work|show (
 	azd env set ATLAS_SCALE_PROFILE $(PROFILE)
 	azd provision --no-prompt
 
+.PHONY: gate
+gate: ## Evaluate-only quality gate on a deployed hosted-agent version: make gate VERSION=good|bad|<n>
+	uv run python -m evals.gate --version $(if $(VERSION),$(VERSION),good)
+
+.PHONY: inject
+inject: ## Regression kit: make inject NAME=weak_instructions ACTION=apply|revert|status
+	uv run python -m scripts.inject_$(NAME) --$(if $(ACTION),$(ACTION),status)
+
+.PHONY: restore-baseline
+restore-baseline: ## Revert every injection, pin the good agent version, run the smoke check
+	uv run python -m scripts.restore_baseline
+
+.PHONY: smoke
+smoke: ## Is ATLAS at its baseline and serving? (SMOKE_FULL=1 adds the canonical case)
+	ATLAS_SMOKE_FULL=$(SMOKE_FULL) bash scripts/verify_smoke.sh
+
+.PHONY: github-oidc
+github-oidc: ## Create/refresh the GitHub Actions OIDC identity and repo variables (no secrets)
+	bash scripts/github_oidc.sh
+
 .PHONY: probe-scenarios
 probe-scenarios: ## Run the canonical incident and every staged scenario to the gate (SCENARIO=key for one)
 	uv run python -m scripts.probe_scenarios $(SCENARIO)
@@ -289,6 +309,10 @@ inject-failing-plan: ## Stage the RB-0099 plan that retries and dead-letters (th
 .PHONY: verify-phase10
 verify-phase10: ## Verify approvals, async remediation, DLQ/replay, timeout and the one trace
 	bash scripts/verify_phase10.sh
+
+.PHONY: verify-phase13
+verify-phase13: ## Verify CI, the gate (bad fails, good passes), rollback, eval-required rule, nightly
+	bash scripts/verify_phase13.sh
 
 .PHONY: verify-phase12
 verify-phase12: ## Verify scorecards, thresholds, local checks, red team ASR, comparison, workbook

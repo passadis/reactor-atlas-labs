@@ -24,6 +24,7 @@ for the APIM-fronted ops API, which is then a one-line change here, not a new ag
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncIterator, Awaitable, Sequence
 from typing import Any
 
@@ -68,7 +69,11 @@ class HostedIncidentAgent:
         return AgentSession(service_session_id=service_session_id, session_id=session_id)
 
     async def _prepare(self, messages: Any) -> tuple[Any, Any]:
-        agent, loaded = await self._runtime.agent()
+        # A version deployed with ATLAS_INSTRUCTIONS_PIN ignores the shared pointer: the pin is part
+        # of that version's identity. Phase 13's deliberately bad build is such a version (pinned to
+        # v0), pre-deployed and NOT the pinned endpoint version, so "breaking the agent on stage"
+        # is a pointer flip (CLAUDE.md 9.2), never a build. Unset: the shared pointer, as before.
+        agent, loaded = await self._runtime.agent(os.environ.get("ATLAS_INSTRUCTIONS_PIN") or None)
         first = is_first_turn(messages)
         log.info("hosted turn: instructions=%s (%s) triage=%s", loaded.version, loaded.source,
                  first)

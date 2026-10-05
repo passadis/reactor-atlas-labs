@@ -1,0 +1,41 @@
+# CI on every push and pull request. No Azure: lint, types, unit tests, contract checks, Bicep
+# build, the deterministic evaluation checks, and the "changed instructions need an eval" rule.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - name: Python 3.13 and the locked workspace
+        run: |
+          uv python install 3.13
+          uv sync --python 3.13 --group dev --group evals --locked
+      - name: ruff
+        run: uv run ruff check .
+      - name: mypy (strict, src)
+        run: uv run mypy src/
+      - name: Unit and contract tests (data determinism and the local eval checks included)
+        run: uv run pytest -q -m "not integration" -p no:cacheprovider
+      - name: OpenAPI spec is valid
+        run: uv run openapi-spec-validator apim/openapi/atlas-ops-api.yaml
+      - name: APIM policy XML is well formed
+        run: uv run python scripts/ci_policy_xml.py
+      - name: Bicep builds
+        run: |
+          az bicep install
+          az bicep build --file infra/main.bicep --stdout > /dev/null
+      - name: Instructions or tool contract changed => a new evaluation is committed
+        if: github.event_name == 'pull_request'
+        run: python scripts/ci_eval_required.py "origin/${{ github.base_ref }}"

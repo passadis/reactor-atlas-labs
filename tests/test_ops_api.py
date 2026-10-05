@@ -403,3 +403,41 @@ def test_the_spec_is_valid_openapi() -> None:
 
     spec, _ = read_from_filename(str(SPEC))
     validate(spec)
+
+
+# ------------------------------------------------- chaos switch: outage and latency (Phase 13) --
+
+
+class _ChaosStore:
+    def __init__(self, doc: dict[str, Any] | None) -> None:
+        self.doc = doc
+
+    async def query(self, *_: Any, **__: Any) -> list[dict[str, Any]]:
+        return [self.doc] if self.doc else []
+
+
+def _chaos(doc: dict[str, Any] | None) -> Any:
+    from opsapi.core import ChaosSwitch
+
+    store = _ChaosStore(doc)
+    return ChaosSwitch(lambda: store, cache_s=0)
+
+
+async def test_an_outage_document_turns_the_switch_on() -> None:
+    switch = _chaos({"enabled": True})
+    assert await switch.active() is True
+    assert await switch.delay_s() == 0
+
+
+async def test_latency_mode_slows_but_never_fails() -> None:
+    switch = _chaos({"enabled": True, "mode": "latency", "latency_ms": 4000})
+    assert await switch.active() is False
+    assert await switch.delay_s() == 4.0
+
+
+async def test_latency_is_capped_and_expiry_still_applies() -> None:
+    assert await _chaos({"enabled": True, "mode": "latency",
+                         "latency_ms": 999_000}).delay_s() == 30.0
+    expired = _chaos({"enabled": True, "mode": "latency", "latency_ms": 4000,
+                      "expires_at": "2000-01-01T00:00:00+00:00"})
+    assert await expired.delay_s() == 0 and await expired.active() is False

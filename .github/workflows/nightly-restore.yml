@@ -1,0 +1,48 @@
+# Nightly proof that the regression kit's restore path never rots (CLAUDE.md 9.5): apply every
+# injection, restore the baseline, smoke. Targets the demo environment (atlas-stg is cut), runs at
+# 03:00 UTC, and refuses to run within 6 hours of a scheduled episode (docs/episodes.yaml).
+name: nightly-restore
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: atlas-mutations
+  cancel-in-progress: false
+
+jobs:
+  apply-then-restore:
+    runs-on: ubuntu-latest
+    environment: atlas
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Blackout window (6 h either side of an episode)
+        run: python3 scripts/ci_blackout.py docs/episodes.yaml
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: astral-sh/setup-uv@v6
+      - env:
+          ATLAS_ENV_FILE: ${{ vars.ATLAS_ENV_FILE }}
+        run: |
+          uv python install 3.13
+          uv sync --python 3.13 --group dev --locked
+          echo "$ATLAS_ENV_FILE" >> "$GITHUB_ENV"
+      - name: Apply every injection
+        run: |
+          for n in weak_instructions latency stale_knowledge prompt_injection bad_tool_description; do
+            uv run python -m scripts.inject_$n --apply
+            uv run python -m scripts.inject_$n --status
+          done
+      - name: Restore the baseline and smoke (always runs)
+        if: always()
+        run: uv run python -m scripts.restore_baseline

@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -36,6 +37,7 @@ from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS = ROOT / "evals" / "results"
+HOSTED_AGENT = "atlas-incident-agent"
 FAULT_MESSAGES = {
     "unavailable": "I could not reach the {backend}.",
     "timeout": "I could not reach the {backend}: no response within 10 seconds.",
@@ -163,6 +165,82 @@ async def run(rows: list[dict[str, Any]], version: str | None,
     return done
 
 
+def run_hosted(rows: list[dict[str, Any]], version: str, concurrency: int) -> list[dict[str, Any]]:
+    """Drive one DEPLOYED hosted-agent version - pinned or not - and record each full turn.
+
+    The agent endpoint serves the pinned version, but honours `agent_reference.version` per
+    request (verified 2026-10-05 from the agent's own "instructions=" log line: API-NOTES 21.3), so
+    the gate evaluates a version without ever moving the pin the demo uses. Tool faults cannot be
+    injected into a deployed agent: fault cases are skipped here.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    from azure.ai.projects import AIProjectClient
+    from azure.identity import AzureCliCredential
+
+    client = AIProjectClient(endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
+                             credential=AzureCliCredential(), allow_preview=True
+                             ).get_openai_client(agent_name=HOSTED_AGENT, timeout=180)
+
+    def one(row: dict[str, Any]) -> dict[str, Any]:
+        started = time.perf_counter()
+        calls: list[dict[str, Any]] = []
+        text, error = "", None
+        for attempt in (1, 2):  # one retry on an infrastructure error, as in-process
+            try:
+                response = client.responses.create(
+                    input=row["query"], extra_body={"agent_reference": {
+                        "name": HOSTED_AGENT, "version": version, "type": "agent_reference"}})
+                break
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {str(exc)[:300]}"
+                if attempt == 2:
+                    response = None
+                time.sleep(10)
+        by_id: dict[str, dict[str, Any]] = {}
+        for item in (response.output if response else []):
+            kind = getattr(item, "type", "")
+            if kind == "function_call":
+                call = {"name": item.name, "arguments": _args(item.arguments), "result": None,
+                        "injected_fault": False}
+                by_id[item.call_id] = call
+                calls.append(call)
+            elif kind == "function_call_output" and item.call_id in by_id:
+                by_id[item.call_id]["result"] = _args(item.output)
+        if response is not None:
+            text = response.output_text or ""
+        try:
+            parsed = json.loads(text)
+            output = parsed if isinstance(parsed, dict) and "severity" in parsed else None
+        except ValueError:
+            output = None
+        failure = None if output else {"reason": "content_filtered" if error and "content_filter"
+                                       in error else "no_triage", "detail": (error or text)[:300]}
+        final = text or f"[triage failed: {(failure or {}).get('reason')}]"
+        rec = {"id": row["id"], "category": row["category"], "query": row["query"],
+               "instructions_version": "hosted", "agent_version": version,
+               "output": output, "failure": failure,
+               "tool_calls": calls, "response": response_messages(calls, final),
+               "response_text": final, "latency_s": round(time.perf_counter() - started, 2),
+               "attempts": 1, "infra_retries": 0, "input_tokens": None, "output_tokens": None}
+        print(f"  {rec['id']:<28} {'ok' if output else failure['reason']:<16} "  # type: ignore[index]
+              f"{rec['latency_s']:>6.1f}s tools={len(calls)}", flush=True)
+        return rec
+
+    cases = [r for r in rows if not r.get("fault")]
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        return list(pool.map(one, cases))
+
+
+def _args(value: Any) -> Any:
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dataset", type=Path,
@@ -171,6 +249,9 @@ def main() -> int:
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--concurrency", type=int, default=4)
     parser.add_argument("--only", nargs="*", help="case ids or categories")
+    parser.add_argument("--hosted-version", default=None,
+                        help="drive this DEPLOYED hosted-agent version instead of the in-process "
+                             "agent (the quality gate)")
     args = parser.parse_args()
     load_local_env()
     run_id = args.run_id or (f"{datetime.now(UTC):%Y%m%d-%H%M%S}-"
@@ -180,7 +261,8 @@ def main() -> int:
     if args.only:
         rows = [r for r in rows if r["id"] in args.only or r["category"] in args.only]
     (RESULTS / run_id).mkdir(parents=True, exist_ok=True)
-    done = asyncio.run(run(rows, args.instructions, args.concurrency))
+    done = (run_hosted(rows, args.hosted_version, args.concurrency) if args.hosted_version
+            else asyncio.run(run(rows, args.instructions, args.concurrency)))
     path = RESULTS / run_id / "responses.jsonl"
     path.write_bytes("".join(json.dumps(r, ensure_ascii=False, sort_keys=True) + "\n"
                              for r in done).encode())
