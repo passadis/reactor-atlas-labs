@@ -1,12 +1,13 @@
 # Scheduled broadcasts. The nightly restore job refuses to run within 6 hours of any `starts`
-# (CLAUDE.md 9.5). Fill in the real times as UTC ISO 8601 strings, e.g. "2026-10-20T16:00:00Z",
-# as they are confirmed. An empty string means "not scheduled yet".
+# (CLAUDE.md 9.5). Either a UTC timestamp ("2026-10-20T16:00:00Z": blocked 6 h either side) or a
+# date ("2026-10-06": the whole day in UTC+3 blocked, plus 6 h either side) while the hour is not
+# fixed. Dates confirmed by the presenter on 2026-10-06; replace with exact times when known.
 episodes:
   - name: Episode 1 - Beyond Chatbots
-    starts: ""
+    starts: "2026-10-06"
   - name: Episode 2 - Reliable Multi-Agent Systems
-    starts: ""
+    starts: "2026-10-08"
   - name: Episode 3 - Agents That Take Action
-    starts: ""
+    starts: "2026-10-13"
   - name: Episode 4 - Production-Grade Agents
-    starts: ""
+    starts: "2026-10-15"

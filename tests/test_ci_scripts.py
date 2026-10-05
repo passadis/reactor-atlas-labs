@@ -58,3 +58,14 @@ def test_the_blackout_window_blocks_within_six_hours(tmp_path: Path,
     assert ci_blackout.main() == 1
     f.write_text(f'episodes:\n  - starts: "{later}"\n  - starts: ""\n')
     assert ci_blackout.main() == 0
+
+
+def test_a_date_without_a_time_blocks_the_whole_day_and_the_margins() -> None:
+    begin, end = ci_blackout.window("2026-10-06")
+    # 00:00 UTC+3 minus 6 h, to 24:00 UTC+3 plus 6 h: the 03:00 UTC nightly on the day is inside
+    assert begin == datetime(2026, 10, 5, 15, tzinfo=UTC)
+    assert end == datetime(2026, 10, 7, 3, tzinfo=UTC)
+    nightly_on_the_day = datetime(2026, 10, 6, 3, tzinfo=UTC)
+    nightly_next_day = datetime(2026, 10, 7, 3, tzinfo=UTC)
+    assert begin <= nightly_on_the_day < end
+    assert not begin <= nightly_next_day < end
