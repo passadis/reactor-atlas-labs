@@ -150,7 +150,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--report", default=CANONICAL_REPORT)
     parser.add_argument("--follow-up", default=FOLLOW_UP, help="empty string to skip")
-    parser.add_argument("--version", choices=["v0", "v1"], default=None)
+    parser.add_argument("--version", choices=["v0", "v1", "v2"], default=None)
     parser.add_argument("--resume", metavar="SESSION_ID", default=None)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--scenario", choices=["canonical"], default="canonical")

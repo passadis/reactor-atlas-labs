@@ -27,7 +27,8 @@ from atlas_common.repositories import CosmosStore, RepositoryUnavailableError
 
 AGENT_NAME = "atlas-incident-agent"
 CONTAINER = "agent-instructions"
-KNOWN_VERSIONS = ("v0", "v1")
+KNOWN_VERSIONS = ("v0", "v1", "v2")
+ACTIVE_BASELINE = "v2"
 
 
 @dataclass(frozen=True)
@@ -65,7 +66,8 @@ def instruction_documents(agent: str = AGENT_NAME) -> list[dict[str, str]]:
         }
         for version in KNOWN_VERSIONS
     ]
-    docs.append({"id": f"{agent}:active", "agent": agent, "version": "v1"})
+    # The version seed.py and demo-reset restore. v2 since 2026-10-05 (Phase 12, API-NOTES 20.7).
+    docs.append({"id": f"{agent}:active", "agent": agent, "version": ACTIVE_BASELINE})
     return docs
 
 

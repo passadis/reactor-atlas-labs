@@ -30,7 +30,7 @@ import importlib
 import logging
 import os
 from collections.abc import Iterator, Mapping, MutableMapping
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from typing import Any
 
@@ -236,6 +236,18 @@ def event(name: str, **attributes: Any) -> None:
     extra.update({f"atlas.{k}": (v if isinstance(v, (int, float, bool)) else str(v))
                   for k, v in attributes.items() if v is not None})
     _events.info(name, extra=extra)
+
+
+def flush_telemetry(timeout_ms: int = 15000) -> None:
+    """Push buffered spans and log records out now. Short-lived scripts (the evaluation runner)
+    must call it before exiting, or their last events die in the batch processor."""
+    from opentelemetry import _logs
+
+    for provider in (trace.get_tracer_provider(), _logs.get_logger_provider()):
+        flush = getattr(provider, "force_flush", None)
+        if flush is not None:
+            with suppress(Exception):
+                flush(timeout_ms)
 
 
 def tracer(name: str = "atlas") -> trace.Tracer:

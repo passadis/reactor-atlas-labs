@@ -215,8 +215,8 @@ async def seed_cosmos(settings: Settings, plans: Iterable[CosmosPlan]) -> dict[s
 async def seed_instructions(settings: Settings) -> int:
     """Copy the instruction versions from the package into Cosmos (CLAUDE.md section 9.1).
 
-    Also resets the active pointer to v1. Seeding is a T-10 operation, so it doubles as the
-    baseline restore for the v0/v1 switch.
+    Also resets the active pointer to ACTIVE_BASELINE (v2 since Phase 12). Seeding is a T-10
+    operation, so it doubles as the baseline restore for the instruction-version switch.
     """
     docs = instruction_documents()
     async with CosmosStore(settings) as store:

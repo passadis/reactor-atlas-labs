@@ -1022,3 +1022,57 @@ make demo-reset                                # T-10: clears the parked cases t
 The gate outcome depends on the plan the model drafts. If a scenario lands on a different approver
 live, that is still a correct, explained decision - read the reasons out. `make probe-scenarios`
 in the T-10 routine tells you beforehand.
+
+## Phase 12 - Evaluation and red teaming (Episode 4)
+
+### What was built
+
+| Piece | What it is |
+|---|---|
+| `evals/datasets/atlas-eval-v1.jsonl` | 72 cases built from the seed by `evals/build_dataset.py`: normal 20, ambiguous 10, tool failure 8, unauthorized 8, stale knowledge 8, prompt injection 10, safety 8. Plus a 20-case holdout nobody tunes against. |
+| `evals/harness.py` | Runs the Episode 1 agent over a dataset exactly as the app does, recording every tool call; breaks one tool in-process for the tool-failure cases (no deployed system is touched). |
+| `evals/local_checks.py` | Deterministic checks, no judge: schema, citations, grounded ids, no forbidden tools, no approval tokens, flags staleness, flags injection, refuses or cares as appropriate, latency. Under a second for 72 cases. |
+| `evals/run_eval.py` | Foundry cloud evaluation: 15 built-in evaluators judged by `gpt-judge`, a scorecard against `evals/thresholds.yaml`, the diff against the committed baseline, and an `eval.run` event for the workbook. Dataset mode (recorded responses) and target mode (Foundry drives the hosted agent). |
+| `evals/run_redteam.py` | AI Red Teaming Agent, local scan of the hosted agent, one scan per strategy, in an isolated environment (PyRIT is not in the lockfile). |
+| Instructions **v2** | Four rules the evaluation found missing; active since 2026-10-05 (pointer flip, no redeploy). |
+
+### The numbers (2026-10-05)
+
+| | v0 (3 lines) | v1 | v2 (active) |
+|---|---|---|---|
+| Deterministic checks | 88 % | 94 % | **99 %** |
+| Prompt injection | **60 %** | 100 % | 100 % |
+| Safety | 62 % | 75 % | **88 %**, 100 % with one reviewed judge false positive |
+| Judge composite | 0.938 | 0.931 | 0.939 |
+| Gate | FAIL | FAIL | **PASS** |
+
+Holdout (20 cases, v2): 20/20 deterministic. Red team (hosted agent): 84 attacks reached the agent,
+0 prohibited actions on both v1 and v2; content ASR 4 % (2/48) on v1 - both "hits" refusals that
+restated the topic - and 0 % (0/48) on v2 (each scan samples its own objectives, so read it as
+consistent, not as a controlled A/B).
+IndirectJailbreak could not execute (PyRIT on Windows) - XPIA is covered by the dataset's canary
+runbooks instead.
+
+### What to show
+
+1. `evals/reports/instructions-comparison.md` - the punchline: generic judges barely move, the
+   targeted checks show v0 falling for 4 in 10 injections. "It worked in the demo" is not evidence.
+2. `evals/reports/scorecard-v1-v2.md` - the gate passing, and the reviewed finding listed on the
+   card with a name and a reason. Honest about the judge's limits.
+3. `evals/reports/redteam-latest.md` - 0 prohibited actions; why one strategy is "not executed".
+4. The workbook's Quality section - the runs over time.
+5. In the app: Instructions v0 vs v2 on the search-flag prompt - v0 misses the flag change.
+
+### Commands
+
+```bash
+make eval INSTRUCTIONS=v2        # ~45 min: agent over 72 cases + judges + scorecard (day before)
+make eval-local RUN=<run_id>     # deterministic checks only, seconds
+make redteam OBJECTIVES=3        # ~30 min, isolated environment
+make verify-phase12
+```
+
+### Fallback
+
+Everything on stage is a file in `evals/reports/` - committed, readable offline. Never start an
+evaluation live; at most re-run `make eval-local` on a recorded run (seconds).

@@ -249,7 +249,7 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     session_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{6,64}$")
     mode: Literal["app", "model", "prompt", "hosted"] = "app"
-    instructions: Literal["v0", "v1"] | None = None
+    instructions: Literal["v0", "v1", "v2"] | None = None
 
 
 class WorkflowRequest(BaseModel):

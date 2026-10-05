@@ -190,13 +190,32 @@ verify-phase07-fast: ## Same, skipping the several-minute orchestrator restart
 	ATLAS_SKIP_KILL=1 bash scripts/verify_phase07.sh
 
 # ---------------------------------------------------------------- Phase 12 --
-.PHONY: eval
-eval: ## Run the evaluation suite and write a scorecard (Phase 12)
-	$(call PENDING,Phase 12 - evaluation)
+# INSTRUCTIONS=v0|v1|v2 (default: the active version). RUN names the results folder.
+INSTRUCTIONS ?=
+EVAL_RUN = $(shell date -u +%Y%m%d-%H%M%S)-$(if $(INSTRUCTIONS),$(INSTRUCTIONS),active)
 
+.PHONY: eval
+eval: ## Full evaluation: agent over the 72 cases, local checks, Foundry judges, scorecard (INSTRUCTIONS=v1)
+	uv run python -m evals.harness $(if $(INSTRUCTIONS),--instructions $(INSTRUCTIONS),) --run-id $(EVAL_RUN)
+	uv run python -m evals.run_eval --responses evals/results/$(EVAL_RUN)/responses.jsonl
+
+.PHONY: eval-local
+eval-local: ## Deterministic checks only, over a recorded run: make eval-local RUN=<run_id>
+	uv run python -m evals.local_checks evals/results/$(RUN)/responses.jsonl
+
+.PHONY: eval-target
+eval-target: ## Target mode: Foundry drives the deployed hosted agent (CLAUDE.md 7.6)
+	uv run python -m evals.run_eval --mode target --dataset evals/datasets/atlas-eval-v1.jsonl
+
+.PHONY: eval-dataset
+eval-dataset: ## Rebuild evals/datasets/*.jsonl from the seed (deterministic; review the diff)
+	uv run python -m evals.build_dataset
+
+# PyRIT is not in the project lockfile: the scan runs in an isolated, throwaway environment.
+OBJECTIVES ?= 3
 .PHONY: redteam
-redteam: ## Run the AI Red Teaming scan (Phase 12; eastus2/northcentralus only)
-	$(call PENDING,Phase 12 - evaluation)
+redteam: ## AI Red Teaming scan of the hosted agent, local, isolated env (OBJECTIVES=3 per risk)
+	uv run --isolated --no-project --python 3.13 --with "azure-ai-evaluation[redteam]==1.18.5" 	  --with "azure-ai-projects==2.6.1" --with "azure-identity" 	  python evals/run_redteam.py --objectives $(OBJECTIVES)
 
 .PHONY: scale
 scale: ## Set Container Apps replica ranges: make scale PROFILE=idle|work|show (control plane: never live)
@@ -270,6 +289,10 @@ inject-failing-plan: ## Stage the RB-0099 plan that retries and dead-letters (th
 .PHONY: verify-phase10
 verify-phase10: ## Verify approvals, async remediation, DLQ/replay, timeout and the one trace
 	bash scripts/verify_phase10.sh
+
+.PHONY: verify-phase12
+verify-phase12: ## Verify scorecards, thresholds, local checks, red team ASR, comparison, workbook
+	bash scripts/verify_phase12.sh
 
 .PHONY: verify-phase11
 verify-phase11: ## Verify the one trace, workbook sections, alerts firing, content capture, availability

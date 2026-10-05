@@ -133,7 +133,7 @@ No passwords or keys anywhere in the code: every service proves who it is with a
 | Control | What it does | What it does NOT do |
 |---|---|---|
 | **Model call / Prompt agent / Hosted agent / This app** (four buttons) | Chooses *which kind of agent* answers the chat. Same question, four architectures: **Model call** = the bare AI with no tools or data (it will guess, sometimes invent change ids - that is the point); **Prompt agent** = an agent defined in Foundry with knowledge search; **Hosted agent** = our agent code running inside Foundry; **This app** = our agent running in the web app with six typed tools and Cosmos-backed memory. | Does not affect the workflow panel. |
-| **Instructions** (dropdown) | Which version of the chat agent's instructions to use: **v0** is three lines ("be helpful"), **v1** is the 111-line operating procedure (classify, correlate, measure, retrieve, assess; never guess an id). Read from Cosmos per request, so switching is instant - no redeploy. | Only applies to the chat path (*This app* shape). |
+| **Instructions** (dropdown) | Which version of the chat agent's instructions to use: **v0** is three lines ("be helpful"), **v1** is the 111-line operating procedure (classify, correlate, measure, retrieve, assess; never guess an id), **v2** (active since 2026-10-05) adds four rules found by the evaluation: care first on self-harm, neutral refusals, low confidence on vague reports, and checking the service a flag or config change lives in. Read from Cosmos per request, so switching is instant - no redeploy. *active* means whatever the shared pointer says (v2). | Only applies to the chat path (*This app*) and the hosted agent. |
 | **Show the contract** (checkbox) | Reveals the raw JSON behind the triage card: the typed structure the agent must return (severity, category, confidence, suspected changes, citations...). Shows that the output is data, not prose. | Changes nothing the agent does. |
 | **Scope** (dropdown) | Which panels are visible: Episode 1 shows chat and tool activity; 2 adds the workflow and approval; 3 adds gateway and remediation; 4 and Full show everything. Also settable in the URL: `?scope=ep2`. | **Never** changes behaviour. Hidden panels keep running and keep their state, so switching mid-run loses nothing. |
 | **Persona / act as** | Shows who you are and which persona's rights apply. **act as** lets you *lower* your privilege for a demo: *manager* (cannot sign a break-glass plan - the 403 beat) or *readonly* (may look, may not act). | Can never raise privilege. Your real identity comes from your sign-in token, not the page. |
@@ -281,7 +281,13 @@ beats. This is the short version, mapped to what is built.
    minutes to fire - too slow to do live).
 4. **Safety:** run *search-flag* - the planted instruction is noticed and escalated, not obeyed.
    Run *orders-stale* - the gate names the stale runbook.
-5. Evaluation, the quality gate and the deliberate regression: **not built yet** (Phases 12-13).
+5. **Evaluation** (`evals/reports/` in the repo - project these): the v0 / v1 / v2 comparison on
+   72 cases. The headline: the generic AI judges barely separate the versions (composite 0.938 /
+   0.931 / 0.939), the targeted checks do - prompt injection 60 % to 100 %, safety 62 % to 88 %,
+   deterministic checks 88 % to 99 %. Then the v2 scorecard (gate PASS, one judge finding
+   reviewed as a false positive and shown on the card) and the red-team summary (84 attacks, 0
+   prohibited actions).
+6. The quality gate and the deliberate regression: **not built yet** (Phase 13).
 
 ### The encore (any episode)
 Set Scope to *Full*, run the canonical case in workflow, approve, watch the remediation finish.
@@ -333,8 +339,10 @@ Honest list of what is not done or not right yet:
 1. **Replica ranges are set to the `work` profile (1-3) for build days.** Before an episode switch
    to always-warm: `make scale PROFILE=show` (about 5 minutes, the day before - never live). The
    `idle` profile (0-3) saves cost between sessions but means cold starts. See section 10.
-2. **Evaluation (Phase 12) and the quality gate (Phase 13)** are not built: the Evaluation panel is
-   a placeholder, and the workbook's Quality section is empty.
+2. **The quality gate (Phase 13)** is not built, and the Evaluation panel on the main screen is
+   still a placeholder. Evaluation itself (Phase 12) is done: scorecards in `evals/reports/`,
+   the workbook's Quality section has data. A full `make eval` takes about 45 minutes of model and
+   judge time - run it the day before, never live.
 3. **Phase 14** - the full four-episode dry run, the five demo-path checks from a cold reset, the
    measured encore time, and the fallback screenshot deck - is not done.
 4. **The gate's approver depends on the plan the AI drafts.** Usually as in section 6; if not, read

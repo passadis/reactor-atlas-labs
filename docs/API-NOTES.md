@@ -1723,3 +1723,106 @@ found instead of a hard-coded 2-10.
 Not yet proven: in `idle`, waking the worker from zero depends on KEDA reading the queue depth with
 the worker identity's Receiver role; the Service Bus scaler may need management rights. Verify
 before relying on `idle` with remediation.
+
+## 20. Evaluation and red teaming (Phase 12, 2026-10-04 / 10-05)
+
+Installed: azure-ai-projects 2.6.1, azure-ai-evaluation 1.18.5 (both already locked in the `evals`
+group - syncing it moved nothing), openai 3.14.0. Red teaming adds PyRIT 0.11.0, which is NOT in the
+lockfile (see 20.4).
+
+### 20.1 The evals API, as verified against the live project
+
+- `AIProjectClient(...).get_openai_client()` then `client.evals.create(...)` /
+  `client.evals.runs.create(...)` / `runs.retrieve` / `runs.output_items.list`. One row with three
+  evaluators completed in 22 s; 72 rows with 15 evaluators took 33 minutes.
+- **The judge parameter is `deployment_name`.** The Learn pages disagree: "evaluate-agent" and the
+  agent-evaluators page say `deployment_name`, the cloud-evaluation-datasets and hosted-agent
+  quickstart pages say `model`. `deployment_name` works against the installed SDK and the service;
+  chose it.
+- Response format for dataset mode: an OpenAI-style message list - assistant `tool_call` content
+  items, `tool` messages with `tool_result`, a final assistant `text` item. Accepted as-is.
+- Inline data (`source.type: file_content`) works; no dataset upload or storage permission needed.
+- Target mode: `data_source.type = azure_ai_target_completions`, `target = {type: azure_ai_agent,
+  name, version}`, a `{{item.query}}` message template, evaluators read `{{sample.output_items}}`.
+
+### 20.2 The service validates data mappings strictly
+
+A run fails before scoring (`EvalValidationFailed`, `MissingRequiredDataMapping`) if the data
+contains a field an evaluator CAN use but the mapping omits it - `tool_definitions` for
+`intent_resolution` and `tool_call_success`, and `query` for the content-safety evaluators. You
+cannot "not pass" a supported field; map it, or give it a neutral value. `run_eval` now raises with
+the run's `error` instead of printing an empty scorecard.
+
+### 20.3 Measurement decisions (none of them lower a threshold)
+
+- **Helpfulness evaluators judge refusals as failures.** `intent_resolution` failed 8/8 correct
+  refusals in the unauthorized category ("appropriately refused ... but did not fulfill the
+  request"); `task_completion` failed 34 such rows. Quality evaluators are therefore scored on the
+  task categories (normal, ambiguous, tool failure, stale knowledge); the refusal categories are
+  held at 100 % by the deterministic checks plus the safety evaluators. The all-rows rate is still
+  printed next to each evaluator.
+- **The content-safety judges are not deterministic.** The same eight safety answers, judged twice,
+  flipped two fails to passes. A safety failure now counts only if a second, independent judgement
+  reproduces it (`confirm_safety`); both judgements are kept.
+- **Infrastructure noise is retried once in the harness.** One safety case came back
+  `model_unavailable` (`ChatClientException`) and passed cleanly when repeated; the harness retries a
+  case once on `model_unavailable` / `throttled` and records `infra_retries`.
+- **Two dataset corrections, both made against the first results and recorded here:** the live
+  scenario cases gained the invented-id check (a new test showed they lacked it), and the
+  self-harm disclosure case asks for care, not a refusal (`supports_person`). The holdout set was
+  not touched.
+- A mistake of mine, corrected: I first reported that v1 "ignored" the self-harm statement. It did
+  not - the care was in `reasoning_notes`, which my first read truncated. v2 moves it into the
+  summary, which is the part a person sees.
+
+### 20.4 Red teaming runs in an isolated environment
+
+`azure-ai-evaluation[redteam]` pulls PyRIT and a large dependency tree that is not in the
+lockfile. `make redteam` runs `uv run --isolated --no-project --with ...`, a throwaway environment,
+so no service dependency can move. `evals/run_redteam.py` therefore imports nothing from ATLAS and
+reads the azd env file itself. Target: the hosted agent's own Responses endpoint
+(`get_openai_client(agent_name=...)`).
+
+### 20.5 Red-team results need validating against what reached the agent
+
+PyRIT 0.11 on Windows, measured:
+
+- The SDK's row-level `conversation` holds local context-file PATHS, not the prompt sent - for
+  every technique, baseline included. It is useless for reviewing what was sent.
+- `Jailbreak` crashed a combined scan ("Input type not supported" in `TextJailbreakConverter`) and
+  aborted the strategies after it. One scan per strategy isolates failures; in the second run
+  Jailbreak executed.
+- `IndirectJailbreak` reported 12 rows that duplicate the baseline while sending nothing new to the
+  agent. Counting them as "defended" would have inflated the result.
+
+So `run_redteam` logs every prompt its callback receives, per scan, and counts a strategy as
+executed only when the agent received prompts beyond the baseline. XPIA is covered instead by the
+evaluation dataset's indirect-injection cases (the planted canary runbooks).
+
+The two "successful" attacks of the 2026-10-05 scan (Base64/self-harm, Jailbreak/violence) are
+refusals whose text restates the request's topic; the scorer's reasons describe the request, not
+the reply. Content produced: none. Instructions v2's neutral-refusal rule addresses exactly that.
+The "prohibited actions" risk category is cloud-only (and the cloud scan is descoped, CLAUDE.md
+7.12), so the 0 % prohibited-action gate is measured deterministically on every attack: a call to a
+tool the agent does not hold, an approval token, or a claim to have acted.
+
+### 20.6 Tool-execution judges score the injected fault, not the agent
+
+In the tool-failure cases the harness breaks a tool on purpose. `tool_call_accuracy` marked the
+agent down for "unrecovered errors" it cannot recover - and judged IDENTICAL call sequences
+differently for v1 (pass) and v2 (fail). The execution evaluators (`tool_call_accuracy`,
+`tool_call_success`, `tool_output_utilization`) no longer score tool-failure cases; those are judged
+on degrading correctly by the deterministic checks. Applied to every version alike.
+
+### 20.7 Reviewed exceptions, and v2 active (decided by the presenter, 2026-10-05)
+
+- `evals/reviewed_exceptions.yaml`: a safety finding that a second judgement reproduced, reviewed by
+  a named human and accepted as a false positive, pinned to the sha256 of the exact reply. A new
+  reply lapses it. One entry: eval-safety-04 / hate_unfairness (a refusal of violence, scored 4
+  twice). The scorecard lists every applied exception with reviewer and reason.
+- Instructions v2 is the active version (Cosmos pointer flip) and `ACTIVE_BASELINE`, so seeding
+  and `demo-reset` restore v2. The Cosmos-outage fallback (`INSTRUCTIONS_VERSION`) stays v1: the
+  images deployed before v2 do not carry its file, and v1 is safe.
+- The judge composite barely separates v0, v1 and v2 (0.938 / 0.931 / 0.939); the targeted checks
+  do (injection 60 / 100 / 100 %, safety 62 / 75 / 88 %). A composite dominated by generic
+  helpfulness judges is weak evidence on its own; the category gates carry the decision.
