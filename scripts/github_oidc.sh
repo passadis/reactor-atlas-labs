@@ -15,7 +15,12 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 REPO="${GITHUB_REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
 APP_NAME="atlas-github-ci"
-SUBJECT="repo:${REPO}:environment:atlas"
+# The subject GitHub actually presents. Repos created since GitHub's immutable-subject change carry
+# owner and repo ids (`repo:owner@<id>/name@<id>:...`); assuming `repo:owner/name` fails login with
+# AADSTS700213 (measured 2026-10-05, API-NOTES 21.6). Read the prefix instead of guessing it.
+PREFIX=$(gh api "repos/${REPO}/actions/oidc/customization/sub" -q '.sub_claim_prefix // empty' \
+  2>/dev/null || true)
+SUBJECT="${PREFIX:-repo:${REPO}}:environment:atlas"
 TENANT=$(az account show --query tenantId -o tsv)
 SUB=$(az account show --query id -o tsv)
 
@@ -33,9 +38,17 @@ HAS=$(az ad app federated-credential list --id "$APP_ID" --query "[?subject=='$S
 if [[ "$HAS" == "0" ]]; then
   BODY=$(mktemp)
   printf '{"name":"github-atlas-environment","issuer":"https://token.actions.githubusercontent.com","subject":"%s","audiences":["api://AzureADTokenExchange"],"description":"GitHub Actions, environment atlas only"}' "$SUBJECT" > "$BODY"
-  az ad app federated-credential create --id "$APP_ID" --parameters "@$BODY" -o none
+  # Still ONE credential: an existing one with a stale subject is corrected in place.
+  if az ad app federated-credential show --id "$APP_ID" \
+      --federated-credential-id github-atlas-environment -o none 2>/dev/null; then
+    az ad app federated-credential update --id "$APP_ID" \
+      --federated-credential-id github-atlas-environment --parameters "@$BODY" -o none
+    echo "federated credential subject corrected to $SUBJECT"
+  else
+    az ad app federated-credential create --id "$APP_ID" --parameters "@$BODY" -o none
+    echo "federated credential added for $SUBJECT"
+  fi
   rm -f "$BODY"
-  echo "federated credential added for $SUBJECT"
 fi
 
 gh api --method PUT "repos/${REPO}/environments/atlas" >/dev/null

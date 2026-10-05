@@ -1886,3 +1886,19 @@ What this does and does not change:
 
 The composite separates the two by only 0.011, inside the 0.03 regression allowance. The category
 gate is what blocks the bad build, the same lesson as 20.7.
+
+### 21.6 GitHub OIDC subjects carry immutable ids on new repos
+
+The first `rollback` and `nightly-restore` runs failed at `azure/login` with `AADSTS700213: No
+matching federated identity record found`. GitHub presented
+`repo:passadis@53148138/reactor-atlas-labs@1406258603:environment:atlas`, but the federated
+credential said `repo:passadis/reactor-atlas-labs:environment:atlas`.
+`GET repos/{repo}/actions/oidc/customization/sub` returns `use_immutable_subject: true` and the
+real `sub_claim_prefix`. Repos created after GitHub's immutable-subject change get this by default.
+`scripts/github_oidc.sh` now reads the prefix from that endpoint and corrects the one existing
+credential in place, so there is still exactly one credential. The upside: renaming the account
+or repo no longer silently breaks, or re-grants, CI access.
+
+The same run exposed a workflow bug. The nightly's "always runs" restore step also ran when the
+blackout check had refused the run. It now runs only if the blackout check passed, and uv is set
+up before the login so an always-run step can execute when the login fails.

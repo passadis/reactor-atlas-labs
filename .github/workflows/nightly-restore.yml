@@ -24,12 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Blackout window (6 h either side of an episode)
+        id: blackout
         run: python3 scripts/ci_blackout.py docs/episodes.yaml
-      - uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - uses: astral-sh/setup-uv@v6
       - env:
           ATLAS_ENV_FILE: ${{ vars.ATLAS_ENV_FILE }}
@@ -37,12 +33,19 @@ jobs:
           uv python install 3.13
           uv sync --python 3.13 --group dev --locked
           echo "$ATLAS_ENV_FILE" >> "$GITHUB_ENV"
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Apply every injection
         run: |
           for n in weak_instructions latency stale_knowledge prompt_injection bad_tool_description; do
             uv run python -m scripts.inject_$n --apply
             uv run python -m scripts.inject_$n --status
           done
-      - name: Restore the baseline and smoke (always runs)
-        if: always()
+      # Runs even when an injection step failed - but never inside the blackout window: a refused
+      # run must not write anything, the restore included.
+      - name: Restore the baseline and smoke (always runs, outside the blackout)
+        if: always() && steps.blackout.outcome == 'success'
         run: uv run python -m scripts.restore_baseline
