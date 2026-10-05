@@ -385,7 +385,7 @@ container). Same UI, same activity panel, same structured card.
 
 | Surface | Name | Pinned / current | Notes |
 |---|---|---|---|
-| Hosted agent | `atlas-incident-agent` | **v4** (endpoint pinned, 100%) | v3 = rollback target. v1 (guardrail placeholder, fails open) and v2 (startup bug) deleted. |
+| Hosted agent | `atlas-incident-agent` | **v7** (endpoint pinned, 100%; was v4 at Phase 05) | v8 = the deliberately bad version for the Episode 4 gate - never pin it on stage. v1 (guardrail placeholder, fails open) and v2 (startup bug) deleted. See PINNED STATE. |
 | Prompt agent | `atlas-triage-prompt` | **v5** | tools from the `atlas-tools` toolbox over MCP; guardrail `atlas-strict` |
 | Toolbox | `atlas-tools` | **v1** (default) | knowledge index; ops MCP + Logic Apps join in Phases 09-10 |
 | Web app | `ca-atlas-web-mkruniv7` | revision `azd-1789834232` | |
@@ -399,7 +399,7 @@ Index Data Reader, Cognitive Services OpenAI User.
 |---|---|---|
 | Same agent, two hosts | Send the canonical report in "This app", then in "Hosted agent". Same tools stream, same Sev2 card. | One definition. Foundry runs one copy, our container runs the other. `src/atlas_hosted_agent/agent.py` is an adapter, not a second agent. |
 | Its own identity | Portal -> the agent -> identity; or `make hosted-status` | The hosted agent does not borrow my credentials or the web app's. It has read-only rights, granted in Bicep. |
-| Versions are pointers | `make hosted-status`, then `make hosted-rollback`, then `make hosted-pin VERSION=4` | Rolling back is a pointer flip on the endpoint - seconds, no build, no deploy. |
+| Versions are pointers | `make hosted-status`, then `make hosted-rollback`, then `make hosted-pin VERSION=7` | Rolling back is a pointer flip on the endpoint - seconds, no build, no deploy. |
 | Tools curated once | Portal -> Toolboxes -> `atlas-tools`; prompt agent answers RB-0042 through it | Add a tool here and every agent attached to the toolbox has it, without redeploying any of them. |
 | The guardrail that silently was not | API-NOTES 12.3: version 1 shipped with a placeholder policy name | A guardrail that fails open looks exactly like a guardrail that works. We check the stored policy, every deploy. |
 
@@ -420,7 +420,7 @@ triage in "Hosted agent" mode before going live** so the first on-stage run is w
 ```bash
 make hosted-deploy            # stage + azd deploy -C agents + guardrail check (never on stage)
 make hosted-status            # versions, pin, guardrail, identity
-make hosted-pin VERSION=4     # pointer flip
+make hosted-pin VERSION=7     # pointer flip (7 = good; evals/agent_versions.yaml)
 make hosted-rollback          # previous good version
 make toolbox                  # upsert atlas-tools and re-attach to the prompt agent
 make verify-phase05           # 11 checks incl. rollback and re-pin, about 6 minutes
@@ -432,7 +432,7 @@ make verify-phase05           # 11 checks incl. rollback and re-pin, about 6 min
 |---|---|
 | Hosted agent slow on the first call | Say "that is the sandbox starting" - it is. Or run the T-10 warm-up. |
 | Hosted agent errors (424 session_not_ready) | `azd ai agent monitor atlas-incident-agent -C agents -s <session> -t console`; switch to "This app" - same agent, same answer. |
-| Wrong version live | `make hosted-pin VERSION=4`. |
+| Wrong version live | `make hosted-pin VERSION=7` (or `make restore-baseline`). |
 
 ---
 
@@ -1130,3 +1130,65 @@ make verify-phase13
 - Rollback: if GitHub Actions is slow or down (an Actions incident queued every run for 10+
   minutes on 2026-10-05), `make restore-baseline` from the laptop does the same pin flip and smoke.
 - Any injection left applied: `make restore-baseline`, then `make smoke` shows 5/5.
+
+## Phase 14 - Hardening and verification (in progress; Episode 1 parts done 2026-10-06)
+
+### PINNED STATE (recorded 2026-10-06 01:30 EEST)
+
+Nothing below changes between episodes except by `rollback.yml` or a rehearsed change.
+
+| Surface | Pinned | How to check |
+|---|---|---|
+| Model `gpt-main` | gpt-5.4 **2026-03-05**, GlobalStandard 200, RAI `atlas-strict`, NoAutoUpgrade | `az cognitiveservices account deployment list` |
+| Model `gpt-judge` | gpt-5.4-mini **2026-03-17**, GlobalStandard 100, RAI `atlas-strict`, NoAutoUpgrade | same |
+| Model `embed-main` | text-embedding-3-large **1**, Standard 120, NoAutoUpgrade | same |
+| Hosted agent `atlas-incident-agent` | **version 7** pinned (100 %). 8 = the deliberate bad build, never pinned. | `make hosted-status` |
+| Prompt agent `atlas-triage-prompt` | **version 5** | Foundry portal, Agents |
+| Toolbox `atlas-tools` | default **version 13** | `project.toolboxes.get("atlas-tools")` |
+| Instructions | **v2** active (Cosmos pointer); packaged fallback v1 | `make inject NAME=weak_instructions` (status) |
+| Web image | `atlas/web-atlas@sha256:b014fe0ea92e2223c255f2711fd6bac5c3c56d332177223e2c08c8c406dc6a45`, revision `--azd-1791223888` | `az containerapp show` |
+| Orchestrator image | `atlas/orchestrator-atlas@sha256:ba3a483b234c97dca0b8525dbf8c615daf222a7a3b0d2b10324c4be4251e1f75`, revision `--0000009` | same |
+| Worker image | `atlas/worker-atlas@sha256:bd6efefab2ef9329787b61c799d4b2cd350628e8eb7836b6fc8b139bddbf04d8`, revision `--0000006` | same |
+| Function apps | `func-atlas-api`, `func-atlas-mcp`: Python 3.13, Flex Consumption, running | `az functionapp list` |
+| Container Apps replicas | **1-3** (`work` profile) on all three. `show` = 2-10 / 2-10 / 1-5 | `make scale PROFILE=...` (the day before, never live) |
+| Traffic splits | none: no canary (descoped, CLAUDE.md 7.12) | |
+
+### Episode 1 demo path (2026-10-06, from a cold `make demo-reset`)
+
+`make verify-demo-paths PATHS="ep1 encore"`: every step of `runbook/EPISODE-1.md` executed and
+asserted. Results in `docs/verification-report.json`.
+
+| Step | Measured | Over 20 s? |
+|---|---|---|
+| `make demo-reset` | 7-12 s (budget 60 s), idempotent | |
+| `make warm` | 34 s, 12/12 | T-10 only |
+| `make demo-raw` | 8-11 s | |
+| Model call shape | first token 1.4 s, 12-14 s total | |
+| Prompt agent shape | 10-25 s | narrate the two tool calls |
+| Hosted agent shape | 16-17 s (warm) | |
+| This app shape | 14-17 s | |
+| v0 vs v2 (two runs) | 12-13 s each | |
+| Ops API down, then triage | about 60 s for the whole beat, triage about 20 s | narrate the failing tools |
+| Follow-up | 3 s | |
+| **Encore** `make e2e-remediation` | **102-119 s** (gate about 50-88 s, then 9/9 steps in about 30 s) | narrate the graph |
+
+### Findings that change what you say on stage
+
+- **v2 escalates an injected runbook 9 times in 10.** It flagged the planted instruction 10/10,
+  but set `needs_human` in 9/10 although its own rule requires it. Lead with the flag. Fix after
+  Episode 1: enforce escalation in code (API-NOTES 22.1). Not changed on episode day.
+- **Cold surfaces:** the ops API answered its first health call in 7.3 s and the gateway path in
+  6.9 s before `make warm`; 1.5 s and 0.1 s after. Never skip `make warm`.
+
+### Fallback assets (Episode 1)
+
+`docs/assets/fallbacks/`: `ep1-1-raw-model.txt`, `ep1-1-four-shapes.txt`,
+`ep1-2-instructions-v0-v2.txt`, `ep1-3-ops-api-down.txt`, `ep1-4-follow-up.txt`,
+`ep1-encore-e2e.txt`, all recorded live on 2026-10-06. Screenshots: `docs/assets/phase04-*.png`.
+Slide screenshots are still to be taken together with the presenter.
+
+### Still to do in Phase 14 (before Episode 2, 2026-10-08)
+
+Runbooks and demo paths for Episodes 2-4; `verify_security.sh`; the ten chaos drills (several are
+control-plane changes, so never on an episode day); `docs/PUBLIC-README.md` and the architecture
+diagram; the full four-episode rehearsal.

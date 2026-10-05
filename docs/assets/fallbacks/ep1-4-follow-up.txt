@@ -1,0 +1,8 @@
+Recorded 2026-10-06 against the deployed ATLAS (eastus2). Fallback for runbook/EPISODE-1.md.
+
+--- Follow-up: Is the service that caused this under a change freeze, and which team owns it? ---
+first event 1.59 s, total 2.6 s
+
+Yes. The suspected causing service is `svc-payments`, and its service record shows `change_freeze: true`. It is owned by `team-payments` and uses the on-call rotation `rot-payments-primary`.
+
+That matters here because the strongest suspected cause is `CHG-2026-0873` on `svc-payments`, deployed at 13:59, shortly before telemetry anomalies began at 14:05.

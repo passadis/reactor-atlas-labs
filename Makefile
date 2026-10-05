@@ -134,7 +134,7 @@ hosted-status: ## Hosted agent versions, pinned version, guardrail and identity
 	$(PY) -m scripts.hosted_agent status
 
 .PHONY: hosted-pin
-hosted-pin: ## Pin the hosted agent to VERSION (pointer flip, no deploy): make hosted-pin VERSION=4
+hosted-pin: ## Pin the hosted agent to VERSION (pointer flip, no deploy): make hosted-pin VERSION=7
 	bash scripts/pin_agent_version.sh $(VERSION)
 
 .PHONY: hosted-rollback
@@ -323,9 +323,24 @@ verify-phase11: ## Verify the one trace, workbook sections, alerts firing, conte
 	bash scripts/verify_phase11.sh
 
 .PHONY: verify-all
-verify-all: ## Run every scripts/verify_phase*.sh plus smoke and security (Phase 14)
+verify-all: ## Every scripts/verify_phase*.sh, then smoke, security and all five demo paths (Phase 14)
 	@set -e; for s in scripts/verify_phase*.sh; do 	  echo "=== $$s ==="; bash "$$s"; 	done
-	@echo "All phase verifications passed."
+	@echo "=== smoke ===" && bash scripts/verify_smoke.sh
+	@echo "=== security ===" && bash scripts/verify_security.sh
+	@echo "=== demo paths ===" && bash scripts/verify_demo_paths.sh
+	@echo "All verifications passed."
+
+.PHONY: warm
+warm: ## T-10 routine: warm every surface the episode touches (read-only, about 35 s)
+	bash scripts/warm.sh
+
+.PHONY: verify-security
+verify-security: ## Phase 14 security pass: 9 checks, zero findings (gitleaks via go run)
+	bash scripts/verify_security.sh
+
+.PHONY: verify-demo-paths
+verify-demo-paths: ## Every on-stage path from a cold demo-reset: make verify-demo-paths PATHS="ep1 encore"
+	bash scripts/verify_demo_paths.sh $(if $(PATHS),--path $(PATHS),)
 
 .PHONY: demo-reset
 demo-reset: ## Return runtime state to the known-good baseline in under 60s (T-10 routine only)

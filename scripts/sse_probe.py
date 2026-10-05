@@ -45,9 +45,12 @@ def cli_token() -> str:
 
 
 def run_turn(client: httpx.Client, message: str, mode: str, session_id: str | None,
-             cancel_after: float | None) -> dict[str, Any]:
+             cancel_after: float | None, instructions: str | None = None) -> dict[str, Any]:
     started = time.perf_counter()
-    r = client.post("/api/chat", json={"message": message, "mode": mode, "session_id": session_id})
+    body: dict[str, Any] = {"message": message, "mode": mode, "session_id": session_id}
+    if instructions:
+        body["instructions"] = instructions  # the UI's Instructions selector, per request
+    r = client.post("/api/chat", json=body)
     r.raise_for_status()
     turn = r.json()
     report: dict[str, Any] = {"turn_id": turn["turn_id"], "session_id": turn["session_id"],
@@ -98,6 +101,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--message", default=CANONICAL)
     parser.add_argument("--follow-up", default=None)
     parser.add_argument("--cancel-after", type=float, default=None)
+    parser.add_argument("--instructions", choices=["v0", "v1", "v2"], default=None,
+                        help="instruction version for this request (default: the active one)")
     args = parser.parse_args(argv)
     if not args.url:
         from atlas_common.config import load_local_env
@@ -107,7 +112,8 @@ def main(argv: list[str] | None = None) -> int:
     headers = {} if args.no_auth else {"Authorization": f"Bearer {cli_token()}"}
 
     with httpx.Client(base_url=args.url, headers=headers, timeout=60) as client:
-        first = run_turn(client, args.message, args.mode, None, args.cancel_after)
+        first = run_turn(client, args.message, args.mode, None, args.cancel_after,
+                         args.instructions)
         out: dict[str, Any] = {"url": args.url, "first": first}
         if args.follow_up:
             out["follow_up"] = run_turn(client, args.follow_up, args.mode, first["session_id"],

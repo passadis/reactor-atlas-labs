@@ -1,0 +1,44 @@
+Recorded 2026-10-06 against the deployed ATLAS (eastus2). Fallback for runbook/EPISODE-1.md.
+
+$ make demo-raw
+
+**Severity:** Sev 2  
+- Customer-facing impact  
+- Revenue path affected  
+- Partial outage (~20% of EU checkout traffic), not full global outage
+
+**Likely cause:**  
+A regression in the **payments service** introduced by the deploy at **14:05**, causing elevated latency/timeouts on checkout requests for a subset of **EU traffic**. Most likely scenarios:
+- bad code path triggered by EU-specific payment routing/config
+- dependency timeout introduced in payments
+- connection pool/external PSP issue surfaced by the new release
+- regional config mismatch released with the deploy
+
+**Change responsible:**  
+The **payments deploy** immediately preceding the incident is the prime suspect, based on exact timing correlation.
+
+**Runbook to follow:**  
+1. **Payments service rollback / mitigation runbook**
+   - halt further rollout
+   - roll back payments to last known good version
+   - if rollback is slow, route/disable the new EU-specific path or feature flag
+2. **Checkout latency/timeouts runbook**
+   - verify downstream dependency saturation
+   - check request latency, timeout rate, and error rate by region
+3. **EU regional validation runbook**
+   - compare EU vs non-EU config, routing, PSP endpoints, secrets, and feature flags
+4. **Post-mitigation verification**
+   - confirm checkout success rate and p95/p99 latency return to baseline
+
+**Services affected:**  
+- **Checkout** (customer-visible symptom: timeouts)
+- **Payments** (likely faulty component/root cause)
+
+**Immediate triage actions:**  
+- Declare **Sev 2**
+- Page **payments on-call**
+- Roll back the **payments deploy**
+- Monitor EU checkout success rate and timeout rate
+- Check whether only specific EU countries/payment methods are impacted
+
+Grounded ATLAS facts named: 0 of 4   (11.2 s)

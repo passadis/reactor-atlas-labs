@@ -1,13 +1,13 @@
 # Scheduled broadcasts. The nightly restore job refuses to run within 6 hours of any `starts`
 # (CLAUDE.md 9.5). Either a UTC timestamp ("2026-10-20T16:00:00Z": blocked 6 h either side) or a
 # date ("2026-10-06": the whole day in UTC+3 blocked, plus 6 h either side) while the hour is not
-# fixed. Dates confirmed by the presenter on 2026-10-06; replace with exact times when known.
+# fixed. Confirmed by the presenter on 2026-10-06: every episode at 18:00 EEST (15:00 UTC).
 episodes:
   - name: Episode 1 - Beyond Chatbots
-    starts: "2026-10-06"
+    starts: "2026-10-06T15:00:00Z"
   - name: Episode 2 - Reliable Multi-Agent Systems
-    starts: "2026-10-08"
+    starts: "2026-10-08T15:00:00Z"
   - name: Episode 3 - Agents That Take Action
-    starts: "2026-10-13"
+    starts: "2026-10-13T15:00:00Z"
   - name: Episode 4 - Production-Grade Agents
-    starts: "2026-10-15"
+    starts: "2026-10-15T15:00:00Z"

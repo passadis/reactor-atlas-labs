@@ -10,6 +10,8 @@ mid-session. It clears what a demo run creates and leaves what the demo depends 
               sessions, workflow checkpoints; every remediation queue, subscription and DLQ;
               approval workflow runs still waiting
   re-armed    the RB-0099 fault switch ON (so the DLQ beat works), the ops API chaos flag OFF
+  reverted    any regression-kit injection still applied (scripts/regression_kit.py), and the
+              hosted agent re-pinned to the good version (evals/agent_versions.yaml) if it is not
   untouched   services, changes, telemetry, people, entitlements, incidents, agent instructions,
               eval runs, the search index, every deployed resource
 """
@@ -24,9 +26,12 @@ import shutil
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
+import yaml
 from atlas_common.config import Settings, load_local_env
 from atlas_common.remediation import (
     COMMANDS_QUEUE,
@@ -40,6 +45,11 @@ from azure.identity.aio import AzureCliCredential
 from azure.servicebus import NEXT_AVAILABLE_SESSION, ServiceBusReceiveMode, ServiceBusSubQueue
 from azure.servicebus.aio import ServiceBusClient
 from azure.servicebus.exceptions import OperationTimeoutError
+
+from scripts import hosted_agent
+from scripts.regression_kit import KIT
+
+ROOT = Path(__file__).resolve().parent.parent
 
 # container -> partition key field
 RUNTIME_CONTAINERS = {
@@ -180,6 +190,36 @@ def cancel_waiting_approval_runs(dry: bool) -> int:
     return len(running)
 
 
+def baseline_agent(dry: bool) -> dict[str, str]:
+    """Revert any applied injection and re-pin the good hosted-agent version.
+
+    Runs after the control container is re-armed: the latency injection writes the same chaos
+    document. Every revert is a data or pointer write (CLAUDE.md 9.2), never a deploy.
+    """
+    with ThreadPoolExecutor(max_workers=len(KIT)) as pool:
+        states = dict(zip(KIT, pool.map(lambda inj: inj.status(), KIT.values()), strict=True))
+    out: dict[str, str] = {}
+    for name, state in states.items():
+        if state == "baseline":
+            out[name] = "baseline"
+        elif dry:
+            out[name] = f"would revert ({state})"
+        else:
+            KIT[name].revert()
+            out[name] = f"reverted ({state})"
+    good = str(yaml.safe_load((ROOT / "evals" / "agent_versions.yaml").read_text())["good"])
+    client = hosted_agent.project()
+    pinned = hosted_agent.pinned_version(client)
+    if pinned == good:
+        out["hosted agent"] = f"pinned {good} (good)"
+    elif dry:
+        out["hosted agent"] = f"would re-pin {pinned} -> {good}"
+    else:
+        hosted_agent.pin(client, good)
+        out["hosted agent"] = f"re-pinned {pinned} -> {good} (good)"
+    return out
+
+
 async def reset(dry: bool) -> dict[str, Any]:
     settings = Settings.from_env()
     report: dict[str, Any] = {}
@@ -198,6 +238,7 @@ async def reset(dry: bool) -> dict[str, Any]:
                 await store.upsert("control", {**doc, "set_at": now,
                                                "set_by": "scripts/demo_reset.py"})
     report["approval_runs_cancelled"] = runs
+    report["baseline"] = await asyncio.to_thread(baseline_agent, dry)
     return report
 
 
@@ -219,6 +260,8 @@ def main(argv: list[str] | None = None) -> int:
           f"{'would be ' if args.dry_run else ''}cancelled")
     if not args.dry_run:
         print("  control  RB-0099 fault ON, ops API chaos OFF")
+    for name, state in report["baseline"].items():
+        print(f"  baseline {name:22s} {state}")
     ok = seconds < 60
     print("within the 60 s budget" if ok else "OVER the 60 s budget")
     return 0 if ok else 1

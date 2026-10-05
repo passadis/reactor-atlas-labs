@@ -121,12 +121,13 @@ def fingerprint(tools: list[Any]) -> str:
 
 
 def latest_version(project: AIProjectClient) -> Any | None:
+    """The numerically newest version. The service orders versions as STRINGS, so
+    `order="desc", limit=1` returned "2" of 13 (API-NOTES 22.2)."""
     try:
-        for version in project.toolboxes.list_versions(TOOLBOX, limit=1, order="desc"):
-            return version
+        versions = list(project.toolboxes.list_versions(TOOLBOX))
     except ResourceNotFoundError:
         return None
-    return None
+    return max(versions, key=lambda v: int(v.version), default=None)
 
 
 def ensure_toolbox(project: AIProjectClient, settings: Settings) -> tuple[str, bool]:
