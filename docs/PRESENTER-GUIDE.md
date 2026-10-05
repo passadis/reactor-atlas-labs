@@ -182,7 +182,8 @@ including retry attempts.
 
 ### Evaluation panel (Episode 4)
 
-A placeholder today. Scorecards and the quality gate arrive in Phases 12-13 (section 11).
+A placeholder today. The evaluation story is told from the committed reports in `evals/reports/`;
+`docs/PRESENTER-GUIDE-EVALUATION.md` explains every number in them.
 
 ---
 
@@ -287,7 +288,10 @@ beats. This is the short version, mapped to what is built.
    deterministic checks 88 % to 99 %. Then the v2 scorecard (gate PASS, one judge finding
    reviewed as a false positive and shown on the card) and the red-team summary (84 attacks, 0
    prohibited actions).
-6. The quality gate and the deliberate regression: **not built yet** (Phase 13).
+6. **The quality gate and the bad build:** version 8 (deliberately weakened, never served) FAILS
+   the gate on prompt injection 2/3; version 7 (live) PASSES. Show `evals/reports/gate-bad.md`,
+   then `gate-good.md`. Everything about evaluation, in newcomer terms, with a step-by-step
+   running order and audience Q&A: **`docs/PRESENTER-GUIDE-EVALUATION.md`**.
 
 ### The encore (any episode)
 Set Scope to *Full*, run the canonical case in workflow, approve, watch the remediation finish.
@@ -339,10 +343,10 @@ Honest list of what is not done or not right yet:
 1. **Replica ranges are set to the `work` profile (1-3) for build days.** Before an episode switch
    to always-warm: `make scale PROFILE=show` (about 5 minutes, the day before - never live). The
    `idle` profile (0-3) saves cost between sessions but means cold starts. See section 10.
-2. **The quality gate (Phase 13)** is not built, and the Evaluation panel on the main screen is
-   still a placeholder. Evaluation itself (Phase 12) is done: scorecards in `evals/reports/`,
-   the workbook's Quality section has data. A full `make eval` takes about 45 minutes of model and
-   judge time - run it the day before, never live.
+2. **The Evaluation panel on the main screen is still a placeholder.** Evaluation (Phase 12) and
+   the quality gate (Phase 13) are done: scorecards and gate verdicts in `evals/reports/`, the
+   workbook's Quality section has data. A full `make eval` takes about 45 minutes and the gate
+   about 20 - run them the day before, never live (`docs/PRESENTER-GUIDE-EVALUATION.md`).
 3. **Phase 14** - the full four-episode dry run, the five demo-path checks from a cold reset, the
    measured encore time, and the fallback screenshot deck - is not done.
 4. **The gate's approver depends on the plan the AI drafts.** Usually as in section 6; if not, read

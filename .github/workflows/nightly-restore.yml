@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   apply-then-restore:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest moves to Ubuntu 26 on 2026-10-19, mid-series
     environment: atlas
     timeout-minutes: 20
     steps:

@@ -1115,7 +1115,7 @@ after the revert, each within 10 s.
 ### Commands
 
 ```bash
-make gate VERSION=bad             # ~15 min (agent turns + judges) - day before, never live
+make gate VERSION=bad             # ~20 min (2 min agent turns, the rest judges) - day before, never live
 make gate VERSION=good
 uv run python -m evals.gate --version bad --rescore <run_id>   # re-score a recording, ~1 min
 make inject NAME=latency ACTION=apply   # then ACTION=revert

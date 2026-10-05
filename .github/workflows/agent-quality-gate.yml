@@ -32,7 +32,7 @@ concurrency:
 
 jobs:
   gate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest moves to Ubuntu 26 on 2026-10-19, mid-series
     environment: atlas
     timeout-minutes: 120
     outputs:
@@ -71,7 +71,7 @@ jobs:
   promote:
     needs: gate
     if: needs.gate.outputs.passed == 'true' && github.event.inputs.promote == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest moves to Ubuntu 26 on 2026-10-19, mid-series
     environment: atlas
     timeout-minutes: 15
     steps:
