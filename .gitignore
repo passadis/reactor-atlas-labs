@@ -44,3 +44,8 @@ agents/.generated/
 
 # Stamped at package time (scripts/stamp_version.sh)
 src/atlas_common/atlas_common/_version.py
+
+# Office lock files (created while a document is open)
+~$*
+# The original Episode 1 deck as received; the corrected copy is tracked
+_labpack/Agent Foundations.pptx
