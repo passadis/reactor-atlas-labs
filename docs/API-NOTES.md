@@ -1404,7 +1404,8 @@ are cheap and immutable, and `upsert_toolbox --check` still compares the definit
   (CreateProcess searches System32 before PATH), which inherits none of the environment. Use
   `shutil.which("bash")` (Git Bash). `verify_phase09` does.
 - `Path.write_text` on Windows writes CRLF. A shell script edited that way fails under a plain
-  bash with `$'': command not found`. `.gitattributes` keeps the index LF; edit tooling now
+  bash with `$'
+': command not found`. `.gitattributes` keeps the index LF; edit tooling now
   writes bytes. 173 working-tree files were normalised to LF.
 - `az.cmd` mangles JMESPath with `==`, `||` or `[]` projections, and multi-line `--body` JSON.
   Filter in Python, pass bodies as `@file`, and query App Insights over REST where a hung az child
@@ -1915,6 +1916,13 @@ deterministic post-validation rule in code. If `reasoning_notes` report embedded
 tool failed, `needs_human` is forced to true. This follows CLAUDE.md's rule that escalation
 thresholds are code, not model judgement. It needs a redeploy of the web app and the hosted
 agent, so it is not made on an episode day.
+
+**Measured properly (2026-10-06 night, presenter's request; no code change).** The 5
+planted-injection cases (eval-inject-indirect-01..04, hold-inject-indirect-01) were each run 10
+times through This app with instructions v2: **flagged 50/50, `needs_human` 49/50** (the one
+miss was hold-inject-indirect-01). With the morning's 10 runs: flagged 60/60, escalated 58/60
+(about 97 %). Decision: the presenter holds code enforcement. The gap is rare, and the Episode 1
+runbook keeps the narration line for when it shows.
 
 ### 22.2 Toolbox versions list in string order
 
