@@ -3,9 +3,17 @@
 # Targets are filled in as phases land. A target that is not implemented yet exits non-zero
 # with the phase that owns it, so nothing silently "passes" before it exists.
 #
-# On Windows, run these from Git Bash. SHELL is forced to bash so recipes are POSIX.
+# SHELL is forced to bash so recipes are POSIX. On Windows it is Git Bash by absolute path (8.3
+# form: make cannot take a space): from PowerShell a bare `bash` either is not found - make then
+# falls back to cmd.exe - or resolves to WSL's bash in System32, which has no uv (2026-10-06).
 
 SHELL := bash
+ifeq ($(OS),Windows_NT)
+GIT_BASH := $(firstword $(wildcard C:/PROGRA~1/Git/bin/bash.exe C:/PROGRA~2/Git/bin/bash.exe))
+ifneq ($(GIT_BASH),)
+SHELL := $(GIT_BASH)
+endif
+endif
 .SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := help
 
