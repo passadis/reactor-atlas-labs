@@ -1948,3 +1948,23 @@ module lock. Touch both attributes once before starting the threads.
   nothing by itself). `make warm` runs at most six probes at a time.
 - Model errors were never logged by the web app (`_model_error` turns them into a UI event). The
   cause was found in Application Insights `exceptions`, which the OpenTelemetry spans populate.
+
+### 22.5 One workflow instance per run, and a failed resume goes back to pending
+
+- **Cause.** `CaseRunner.workflow(mode)` returned ONE cached instance per mode, and every run and
+  cold resume used it. Agent Framework refuses a second concurrent run on an instance
+  (`WorkflowException: Workflow is already running; concurrent runs are not allowed on the same
+  instance`). On 2026-10-06 an approval landed on the orchestrator replica that was busy with
+  another case. The cold resume failed, the approval row stayed `answered`, and the case stayed
+  `awaiting_approval` with nothing on screen. This became likely once the `show` profile put two
+  orchestrator replicas behind one ingress.
+- **Fix.** `new_workflow(mode)` builds a fresh instance for every run, warm wait and cold resume.
+  The cached one serves `GET /graph` only. Checkpoints stay compatible: every build hashes to the
+  same graph signature (tests pin this, and that two instances run concurrently).
+- **Second fix.** `_decide` writes the answer before resuming, on purpose (the kill window). If the
+  resume fails while the process is alive, the row now goes back to `pending` with the reason, and
+  the caller gets a 503 "try once more". Before, the case was answered but stuck.
+- **Proof, live.** Two cases parked, a third mid-run, the first two approved during that run: all
+  three completed with remediation succeeded (30 s, 39 s, 14 s).
+- Also: model failures are now logged with their real text (`shapes._model_error`). New session
+  restores the example prompts, with delegated click handling.

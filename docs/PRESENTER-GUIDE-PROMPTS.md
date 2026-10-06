@@ -50,8 +50,7 @@ The **act as** dropdown in the header narrows you:
 A good Episode 2 beat: act as **manager**, try to approve the canonical case, read the refusal out
 loud, switch back to **myself**, approve. The model never decides who may approve; code does.
 
-**Keep the console open while a case is waiting.** And run one workflow at a time until the
-known issue in section 5 is fixed.
+**Keep the console open while a case is waiting**, so you watch it continue in the same timeline.
 
 ---
 
@@ -141,15 +140,10 @@ are always printed and are always right about the plan in front of you. Read the
 
 ---
 
-## 5. Known issue (2026-10-06, fix scheduled before Episode 2)
+## 5. Fixed: approvals while another case runs (2026-10-06)
 
-The orchestrator reuses one workflow object per orchestration mode. If an approval arrives on the
-orchestrator replica that is **at that moment running another case**, the resume fails with
-"Workflow is already running". The case stays parked and the console does not say why. It needs two
-things at once, so a single presenter running one case at a time rarely hits it.
-
-Until it is fixed:
-
-- Run one workflow at a time. Approve it before starting the next.
-- If an approved case does not move within a minute, run `make demo-reset` and start it again.
-  Or show the recorded fallback.
+Until the evening of 2026-10-06, approving a case while the orchestrator replica was busy with
+another case could leave it parked. Fixed and proven live: two cases approved while a third was
+running all completed. You can now run the contrast prompts back to back. If a decision ever cannot
+be applied, the console now says so and the case is offered for approval again - press Approve once
+more.

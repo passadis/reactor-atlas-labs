@@ -266,6 +266,9 @@ function finish() {
 
 // -------------------------------------------------------------------------- wiring --
 document.addEventListener("DOMContentLoaded", () => {
+  // The example prompts, kept so New session can put them back (they are removed on the first
+  // message, and the presenter needs them again for the next shape - 2026-10-06).
+  const hintHtml = document.querySelector(".hint")?.outerHTML || "";
   const params = new URLSearchParams(location.search);
   applyScope(SCOPES.includes(params.get("scope")) ? params.get("scope") : "ep1");
   $("#scope").addEventListener("change", (e) => applyScope(e.target.value));
@@ -299,12 +302,17 @@ document.addEventListener("DOMContentLoaded", () => {
     cancelTurn(false);
     state.sessionId = null;
     sessionStorage.removeItem("atlas.session");
-    $("#log").innerHTML = "";
+    $("#log").innerHTML = hintHtml;
     $("#tools").innerHTML = "";
     $("#m-session").textContent = "-";
   });
-  document.querySelectorAll(".example").forEach((b) =>
-    b.addEventListener("click", () => { $("#message").value = b.textContent.trim(); $("#message").focus(); }));
+  // Delegated, so the examples New session restores work too.
+  $("#log").addEventListener("click", (e) => {
+    const b = e.target.closest(".example");
+    if (!b) return;
+    $("#message").value = b.textContent.trim();
+    $("#message").focus();
+  });
   $("#composer").addEventListener("submit", (e) => {
     e.preventDefault();
     const text = $("#message").value.trim();

@@ -246,26 +246,31 @@ class CaseRunner:
     # ----------------------------------------------------------------------- topology --
 
     def workflow(self, mode: Mode) -> Workflow:
-        """Built once per mode and reused.
+        """One cached instance per mode, for the TOPOLOGY only (`GET /graph`). Never run it.
 
-        Reused rather than rebuilt because a checkpoint is bound to its graph: one workflow object
-        per mode, with ids from `node_ids.py`, keeps `graph_signature_hash` stable for the life of
-        the process and across restarts.
+        Runs and resumes each take `new_workflow(mode)`: Agent Framework refuses two concurrent
+        runs on one instance ("Workflow is already running"), which failed a cold resume that
+        landed on a replica busy with another case (2026-10-06, API-NOTES 22.5).
         """
         if mode not in self._workflows:
-            if mode == "handoff":
-                # Handoff's typed case comes out of a conversational mesh; the durable, gated
-                # part of its run is the approval tail. That is what a resume restores into.
-                self._workflows[mode] = build_approval_tail(
-                    catalogue=self.catalogue, entitlements=self.entitlements,
-                    checkpoint_storage=self.checkpoints)
-            else:
-                self._workflows[mode] = build_workflow(
-                    self.factory, mode,
-                    catalogue=self.catalogue or None, entitlements=self.entitlements or None,
-                    checkpoint_storage=self.checkpoints,
-                )
+            self._workflows[mode] = self.new_workflow(mode)
         return self._workflows[mode]
+
+    def new_workflow(self, mode: Mode) -> Workflow:
+        """A fresh instance for one run. Checkpoints stay compatible: the graph is built from the
+        fixed ids in `node_ids.py`, so `graph_signature_hash` is the same for every build
+        (tests/test_checkpoints.py::test_the_graph_signature_is_stable_across_builds)."""
+        if mode == "handoff":
+            # Handoff's typed case comes out of a conversational mesh; the durable, gated part of
+            # its run is the approval tail. That is what a resume restores into.
+            return build_approval_tail(
+                catalogue=self.catalogue, entitlements=self.entitlements,
+                checkpoint_storage=self.checkpoints)
+        return build_workflow(
+            self.factory, mode,
+            catalogue=self.catalogue or None, entitlements=self.entitlements or None,
+            checkpoint_storage=self.checkpoints,
+        )
 
     def workflow_name(self, mode: Mode) -> str:
         if mode == "handoff":
@@ -340,8 +345,8 @@ class CaseRunner:
         return run
 
     async def _drive(self, run: Run, request: IntakeRequest) -> None:
-        # The workflows (and their agents) are built once per shape and kept; this updates their
-        # tools' descriptions in place if APIM changed one (atlas_common.tool_catalog).
+        # Every run builds its workflow from the shared tool catalogue; this refreshes the
+        # catalogue's descriptions if APIM changed one (atlas_common.tool_catalog).
         await self.runtime.refresh_tool_catalog()
         try:
             async with asyncio.timeout(RUN_TIMEOUT_S):
@@ -420,7 +425,7 @@ class CaseRunner:
         the demo is one continuous timeline. Nothing is lost if it gives up - the checkpoint is
         already written, and approving later resumes the case cold (`resume_from_checkpoint`).
         """
-        workflow = self.workflow(mode)
+        workflow = self.new_workflow(mode)
         suspended = await self._pump(run, workflow.run(request, stream=True))
         await self._await_human(run, workflow, suspended)
 
@@ -489,7 +494,7 @@ class CaseRunner:
 
         # Same gate, same suspension, same cold resume as the graph. Building the report by hand
         # here - as the Phase 06 handoff path did - skipped the policy gate entirely.
-        tail = self.workflow("handoff")
+        tail = self.new_workflow("handoff")
         suspended = await self._pump(run, tail.run(case, stream=True))
         await self._await_human(run, tail, suspended)
 
@@ -643,7 +648,7 @@ class CaseRunner:
         run.done = False
         run.checkpoint_id = target
         run.request_id = run.request_id or ApprovalExecutor.request_id_for(case_id)
-        workflow = self.workflow(resolved)
+        workflow = self.new_workflow(resolved)
         started = time.perf_counter()
         with (
             bound(case_id=case_id),

@@ -57,10 +57,9 @@ different things with four different failure modes.*
 > Checkout is timing out for about 20% of EU customers since 14:05, started right after the payments deploy.
 
 On a fresh page it is the first example button under "Describe an incident. Try:". Clicking it
-fills the box; then Send. **The example buttons disappear after the first message, and New session
-does not bring them back.** So copy the sentence to the clipboard before going live, and for each
-shape: **New session**, pick the shape, **Ctrl+V**, Send. New session between shapes makes each
-one answer fresh, not as a follow-up.
+fills the box; then Send. The buttons disappear after the first message, and **New session brings
+them back** (since 2026-10-06 night). For each shape: **New session**, pick the shape, click the
+example, Send. New session between shapes makes each one answer fresh, not as a follow-up.
 
 ## Beat 2 - Instructions are a contract (5 min)
 

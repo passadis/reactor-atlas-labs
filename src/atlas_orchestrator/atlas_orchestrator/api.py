@@ -242,7 +242,18 @@ async def _decide(case_id: str, body: Decide, request: Request, *,
 
     answer = ApprovalResponse(approved=approved, by=body.by, role=body.role, comment=body.comment)
     await engine.cases.record_answer(case_id, answer.model_dump(mode="json"))
-    outcome = await engine.answer(case_id, answer)
+    try:
+        outcome = await engine.answer(case_id, answer)
+    except Exception as exc:
+        # The process is alive, so this is not the kill window the early write exists for: put
+        # the row back to pending, so the console offers the decision again instead of leaving a
+        # case "answered" but parked forever (2026-10-06, API-NOTES 22.5).
+        log.exception("case %s: the answer was recorded but the resume failed", case_id)
+        await engine.cases.mark_approval(case_id, "pending",
+                                         f"resume failed: {type(exc).__name__}: {exc}")
+        raise HTTPException(status_code=503, detail="The decision could not be applied: the case "
+                            "did not resume. It is waiting for approval again - try once more."
+                            ) from exc
     return {"case_id": case_id, "approved": approved, "by": body.by, "role": body.role, **outcome}
 
 

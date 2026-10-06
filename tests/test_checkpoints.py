@@ -457,3 +457,34 @@ def test_the_approval_executor_forgets_cases_whose_window_long_closed() -> None:
                          "approval:CASE-JUST": parked("CASE-JUST", 2)}
     state = asyncio.run(executor.on_checkpoint_save())
     assert set(state["pending"]) == {"approval:CASE-JUST"}  # still answerable by the expiry path
+
+
+# ------------------------------------------------------------ one instance per run --
+
+
+async def test_one_workflow_instance_refuses_a_second_concurrent_run() -> None:
+    """The framework behaviour behind the 2026-10-06 stuck approval (API-NOTES 22.5): a cold
+    resume on a replica whose shared instance was busy failed. Pinned so an upgrade that changes
+    it is noticed - runner.new_workflow() no longer depends on it either way."""
+    from agent_framework.exceptions import WorkflowException
+
+    workflow = build(None)
+    first = workflow.run(analysed_case(), stream=True)
+    await anext(first)  # the first run is now in flight on this instance
+    with pytest.raises(WorkflowException, match="already running"):
+        async for _ in workflow.run(analysed_case(), stream=True):
+            pass
+    async for _ in first:  # let the first run finish in its own context
+        pass
+
+
+async def test_separate_instances_run_concurrently_and_share_a_checkpoint_signature(
+        tmp_path: Path) -> None:
+    """What runner.new_workflow() relies on: a fresh build per run, concurrent runs fine, and
+    every build restorable from the others' checkpoints (same graph signature)."""
+    storage = FileCheckpointStorage(storage_path=str(tmp_path))
+    one, two = build(storage), build(storage)
+    assert one is not two and one.graph_signature_hash == two.graph_signature_hash
+    (pending_one, _), (pending_two, _) = await asyncio.gather(
+        run_to_gate(one, analysed_case()), run_to_gate(two, analysed_case()))
+    assert pending_one and pending_two

@@ -75,6 +75,9 @@ def _model_error(exc: BaseException) -> UiEvent | None:
     reason = model_failure_reason(exc)
     if reason is None:
         return None
+    # The room sees a friendly message; the log keeps the real one. Unlogged, a throttle looked
+    # like an outage and was only found in Application Insights (2026-10-06).
+    log.warning("model failure (%s): %s", reason, f"{type(exc).__name__}: {exc}"[:500])
     return _error(reason, retry_after=retry_after_seconds(exc))
 
 
