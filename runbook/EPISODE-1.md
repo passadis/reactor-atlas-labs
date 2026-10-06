@@ -44,8 +44,8 @@ different things with four different failure modes.*
 
 | # | Do | The room sees (measured) | Say |
 |---|---|---|---|
-| 1 | Terminal: `make demo-raw` | A confident Sev 2 with invented detail. Footer: grounded facts named **0 of 4**. 8-11 s. | Same model we use everywhere. It is not wrong because it is weak; it is wrong because it has nothing to look at. |
-| 2 | Web app, shape **Model call**, send the canonical report | Prose, no tools, first token about 1.5 s. | The same thing inside our UI. |
+| 1 | *Optional - skip it; step 2 makes the same point in the UI. Keep as the fallback if the web app is slow.* Terminal: `make demo-raw` | A confident Sev 2 with invented detail. Footer: grounded facts named **0 of 4**. 8-11 s. | Same model we use everywhere. It is not wrong because it is weak; it is wrong because it has nothing to look at. |
+| 2 | Web app, shape **Model call**, send the canonical report | Prose, no tools, first token about 1.5 s. A confident answer with no change id, no real runbook, no real metric. | It has nothing to look at, so it guesses. Same model we use everywhere. |
 | 3 | Shape **Prompt agent**, ask *"Which runbook covers elevated p95 latency on the Checkout API after a deployment?"* | 2 tool calls, answers **RB-0042**. About 10-25 s. | Instructions, model and a toolbox in Foundry. No code of ours runs. It can read runbooks but cannot see a change. |
 | 4 | Shape **Hosted agent**, the canonical report | 9-10 tool calls stream, then **Sev2, CHG-2026-0873, RB-0042**. About 16 s. | My code, my framework, run by Foundry under its own identity, versioned. |
 | 5 | Shape **This app**, the canonical report | The same answer, 9 tool calls in the activity panel. About 14 s. | The same agent definition, in our container, behind our UI. |
