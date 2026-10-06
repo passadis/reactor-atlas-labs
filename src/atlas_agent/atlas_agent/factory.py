@@ -151,6 +151,11 @@ def model_failure_reason(exc: BaseException) -> FailureReason | None:
                 return "throttled"
             return "model_unavailable"
         if isinstance(current, ChatClientException):
+            # The framework wraps a 429 as text ("... exceeded token rate limit"): a throttle, not
+            # an outage, so the UI shows the retry countdown (measured 2026-10-06).
+            text = str(current).lower()
+            if "rate limit" in text or "too many requests" in text:
+                return "throttled"
             return "model_unavailable"
         current = current.__cause__ or current.__context__
     return None

@@ -12,7 +12,7 @@
     "opsEmail": { "value": "${ATLAS_OPS_EMAIL=atlas-ops@contoso.example}" },
     "gptMainModelName": { "value": "${ATLAS_GPT_MAIN_MODEL=gpt-5.4}" },
     "gptMainModelVersion": { "value": "${ATLAS_GPT_MAIN_VERSION=2026-03-05}" },
-    "gptMainCapacity": { "value": "${ATLAS_GPT_MAIN_CAPACITY=200}" },
+    "gptMainCapacity": { "value": "${ATLAS_GPT_MAIN_CAPACITY=1000}" },
     "gptJudgeModelName": { "value": "${ATLAS_GPT_JUDGE_MODEL=gpt-5.4-mini}" },
     "gptJudgeModelVersion": { "value": "${ATLAS_GPT_JUDGE_VERSION=2026-03-17}" },
     "gptJudgeCapacity": { "value": "${ATLAS_GPT_JUDGE_CAPACITY=100}" },

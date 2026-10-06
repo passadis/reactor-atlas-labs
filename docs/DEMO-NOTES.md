@@ -1139,14 +1139,14 @@ Nothing below changes between episodes except by `rollback.yml` or a rehearsed c
 
 | Surface | Pinned | How to check |
 |---|---|---|
-| Model `gpt-main` | gpt-5.4 **2026-03-05**, GlobalStandard 200, RAI `atlas-strict`, NoAutoUpgrade | `az cognitiveservices account deployment list` |
+| Model `gpt-main` | gpt-5.4 **2026-03-05**, GlobalStandard **1000** (was 200 until 2026-10-06 19:40), RAI `atlas-strict`, NoAutoUpgrade | `az cognitiveservices account deployment list` |
 | Model `gpt-judge` | gpt-5.4-mini **2026-03-17**, GlobalStandard 100, RAI `atlas-strict`, NoAutoUpgrade | same |
 | Model `embed-main` | text-embedding-3-large **1**, Standard 120, NoAutoUpgrade | same |
 | Hosted agent `atlas-incident-agent` | **version 7** pinned (100 %). 8 = the deliberate bad build, never pinned. | `make hosted-status` |
 | Prompt agent `atlas-triage-prompt` | **version 5** | Foundry portal, Agents |
 | Toolbox `atlas-tools` | default **version 13** | `project.toolboxes.get("atlas-tools")` |
 | Instructions | **v2** active (Cosmos pointer); packaged fallback v1 | `make inject NAME=weak_instructions` (status) |
-| Web image | `atlas/web-atlas@sha256:b014fe0ea92e2223c255f2711fd6bac5c3c56d332177223e2c08c8c406dc6a45`, revision `--azd-1791223888` | `az containerapp show` |
+| Web image | `atlas/web-atlas@sha256:5bae7ce1718715bc6dc0e1cee3eb2de5ddf41c22527738367bdd843c1f0eac8c`, revision `azd-1791310087` (2026-10-06 night: JSON-reply rendering, throttle label) | `az containerapp show` |
 | Orchestrator image | `atlas/orchestrator-atlas@sha256:ba3a483b234c97dca0b8525dbf8c615daf222a7a3b0d2b10324c4be4251e1f75`, revision `--0000009` | same |
 | Worker image | `atlas/worker-atlas@sha256:bd6efefab2ef9329787b61c799d4b2cd350628e8eb7836b6fc8b139bddbf04d8`, revision `--0000006` | same |
 | Function apps | `func-atlas-api`, `func-atlas-mcp`: Python 3.13, Flex Consumption, running | `az functionapp list` |

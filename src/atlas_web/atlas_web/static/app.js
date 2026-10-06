@@ -122,6 +122,20 @@ function renderTriage(el, value, caseId) {
     </div>`;
 }
 
+// A triage-shaped JSON reply that did not come through the validated first-turn path: draw it as a
+// card for readability, labelled as unvalidated. Anything else stays as it is.
+function renderJsonReply(bot, prose) {
+  const raw = prose.textContent.trim();
+  if (!raw.startsWith("{") || !raw.endsWith("}")) return;
+  let value;
+  try { value = JSON.parse(raw); } catch { return; }
+  if (!value || typeof value !== "object" || !value.severity || !value.summary) return;
+  value.citations = (value.citations || []).map((c) => (typeof c === "string" ? { doc_id: c, title: "" } : c));
+  renderTriage(bot, value, null);
+  const who = bot.querySelector(".who");
+  if (who) who.textContent = "ATLAS answer - from a follow-up, not validated against the contract. For a new incident, use New session.";
+}
+
 function toolRow(data) {
   const li = document.createElement("li");
   li.id = `tool-${data.call_id}`;
@@ -186,8 +200,13 @@ async function send(message) {
     }
     if (d.instructions) $("#m-instr").textContent = `${d.instructions.version} (${d.instructions.source})`;
   });
+  // A follow-up streams prose. If the reply is a JSON object instead (a new incident sent into an
+  // existing conversation gets a triage-shaped answer without the first-turn schema), never show
+  // raw JSON: hold it while it streams and render it at the end (2026-10-06).
+  let rawText = "";
   es.addEventListener("token", (e) => {
-    prose.textContent += JSON.parse(e.data).text;
+    rawText += JSON.parse(e.data).text;
+    prose.textContent = rawText.trimStart().startsWith("{") ? "Composing a structured answer..." : rawText;
     $("#log").scrollTop = $("#log").scrollHeight;
   });
   es.addEventListener("tool_start", (e) => toolRow(JSON.parse(e.data)));
@@ -221,6 +240,8 @@ async function send(message) {
     if (d.instructions_version) $("#m-instr").textContent = d.instructions_version;
     // Foundry agent citation markers (U+3010 ... U+3011) are for machines;
     // the activity panel already shows the search calls.
+    if (rawText && !bot.classList.contains("err")) prose.textContent = rawText;
+    if (!bot.querySelector(".triage")) renderJsonReply(bot, prose);
     prose.textContent = prose.textContent.replace(/\u3010[^\u3011]*\u3011/g, "");
     if (!prose.textContent && !bot.querySelector(".triage")) prose.textContent = "(no answer)";
     es.close();

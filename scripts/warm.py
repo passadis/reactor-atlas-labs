@@ -149,7 +149,9 @@ def main() -> int:
         return name, ok, time.perf_counter() - started, detail
 
     started = time.perf_counter()
-    with ThreadPoolExecutor(max_workers=len(probes)) as pool:
+    # Capped: every probe at once is about 250K tokens within seconds, enough to throttle
+    # gpt-main (measured 2026-10-06). Six at a time stays well under the limit.
+    with ThreadPoolExecutor(max_workers=6) as pool:
         results = list(pool.map(run, probes.items()))
     for name, ok, seconds, detail in results:
         print(f"{'WARM' if ok else 'FAIL'}  {name:<28} {seconds:5.1f} s  {detail}")

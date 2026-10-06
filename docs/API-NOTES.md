@@ -1928,3 +1928,23 @@ the same bug (it compared its fingerprint against version 2), fixed the same day
 `scripts/warm.py` runs its probes in threads. Two of them touched `client.responses` and
 `client.embeddings` for the first time concurrently, and the import raised `_DeadlockError` on the
 module lock. Touch both attributes once before starting the threads.
+
+### 22.4 Episode 1 night (2026-10-06): raw JSON, a mislabelled throttle, and the rate limit
+
+- **Raw JSON in the chat.** A new incident sent into an EXISTING conversation is a follow-up turn:
+  it streams as prose and gets no first-turn schema. The model sometimes answers it with a
+  triage-shaped JSON object anyway, with citations as plain ids. The page printed it raw. Now
+  (`app.js` `renderJsonReply`) a JSON reply is held while it streams. It is drawn as a card
+  labelled "from a follow-up, not validated against the contract - for a new incident, use New
+  session". Anything else stays prose. The presenter's habit stays the same: New session per
+  incident.
+- **"Could not reach the language model" was a throttle.** Agent Framework wraps the 429 as
+  `ChatClientException("... exceeded token rate limit")`. The classifier mapped it to
+  `model_unavailable`. It now returns `throttled`, so the UI shows the retry countdown
+  (tests/test_failure_reason.py).
+- **The 200-unit gpt-main limit was reachable.** A triage costs about 30K tokens. Sixteen parallel
+  diagnosis triages, or one `make warm` (about 8 at once), are enough to hit 200K TPM. gpt-main is
+  now 1000 units (1M TPM; quota 10,000; GlobalStandard is billed per token, so a higher limit costs
+  nothing by itself). `make warm` runs at most six probes at a time.
+- Model errors were never logged by the web app (`_model_error` turns them into a UI event). The
+  cause was found in Application Insights `exceptions`, which the OpenTelemetry spans populate.

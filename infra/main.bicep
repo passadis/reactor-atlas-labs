@@ -61,7 +61,7 @@ param gptMainModelName string = 'gpt-5.4'
 @description('Version of the gpt-main model.')
 param gptMainModelVersion string = '2026-03-05'
 @description('Capacity for gpt-main, in units of 1000 TPM. eastus2 limit is 10000 units.')
-param gptMainCapacity int = 200
+param gptMainCapacity int = 1000
 
 @description('Model backing the gpt-judge alias. Deliberately a different family so eval runs never starve the demo.')
 param gptJudgeModelName string = 'gpt-5.4-mini'
