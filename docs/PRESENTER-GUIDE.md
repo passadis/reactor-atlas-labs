@@ -189,6 +189,10 @@ A placeholder today. The evaluation story is told from the committed reports in 
 
 ## 6. The four live incidents
 
+> **Start here for the prompts:** `docs/PRESENTER-GUIDE-PROMPTS.md` - each of the five prompts,
+> Send vs Run in workflow, how to initiate an approval, and how far each one goes (measured
+> 2026-10-06).
+
 The data is a fixed, synthetic two-year history: 500 past incidents, 303 deployments, 60 runbooks,
 25 services, 16 people. Any history question works for any service ("Have we seen this before on
 Orders?", "What changed on Fraud last week?", "Who owns Identity, and is it frozen?").

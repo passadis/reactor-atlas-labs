@@ -98,6 +98,7 @@ function addMessage(cls, who, html) {
   $("#log").scrollTop = $("#log").scrollHeight;
   return el;
 }
+const CANONICAL_REPORT = "Checkout is timing out for about 20% of EU customers since 14:05, started right after the payments deploy.";
 const SHAPE_LABEL = { app: "This app", model: "Model call", prompt: "Prompt agent", hosted: "Hosted agent" };
 
 function renderTriage(el, value, caseId) {
@@ -318,7 +319,9 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#wf-approve").addEventListener("click", () => decide("approve"));
   $("#wf-reject").addEventListener("click", () => decide("reject"));
   $("#run-workflow").addEventListener("click", () => {
-    const text = $("#message").value.trim() || document.querySelector(".example").textContent.trim();
+    // Empty box: the canonical report. Not read from the example button - those are removed after
+    // the first message, which crashed this handler (2026-10-06).
+    const text = $("#message").value.trim() || CANONICAL_REPORT;
     $("#message").value = "";
     runWorkflow(text);
   });
