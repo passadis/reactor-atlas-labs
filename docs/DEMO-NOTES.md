@@ -1150,7 +1150,7 @@ Nothing below changes between episodes except by `rollback.yml` or a rehearsed c
 | Orchestrator image | `atlas/orchestrator-atlas@sha256:ba3a483b234c97dca0b8525dbf8c615daf222a7a3b0d2b10324c4be4251e1f75`, revision `--0000009` | same |
 | Worker image | `atlas/worker-atlas@sha256:bd6efefab2ef9329787b61c799d4b2cd350628e8eb7836b6fc8b139bddbf04d8`, revision `--0000006` | same |
 | Function apps | `func-atlas-api`, `func-atlas-mcp`: Python 3.13, Flex Consumption, running | `az functionapp list` |
-| Container Apps replicas | **1-3** (`work` profile) on all three. `show` = 2-10 / 2-10 / 1-5 | `make scale PROFILE=...` (the day before, never live) |
+| Container Apps replicas | **`show`** since 2026-10-06 15:38 EEST: web 2-10, orchestrator 2-10, worker 1-5. Revisions web `--0000009`, orch `--0000010`, worker `--0000007`, same images as above. `make scale PROFILE=work` returns to 1-3. | `make scale PROFILE=...` (never live) |
 | Traffic splits | none: no canary (descoped, CLAUDE.md 7.12) | |
 
 ### Episode 1 demo path (2026-10-06, from a cold `make demo-reset`)
@@ -1179,6 +1179,16 @@ asserted. Results in `docs/verification-report.json`.
   Episode 1: enforce escalation in code (API-NOTES 22.1). Not changed on episode day.
 - **Cold surfaces:** the ops API answered its first health call in 7.3 s and the gateway path in
   6.9 s before `make warm`; 1.5 s and 0.1 s after. Never skip `make warm`.
+
+### Re-verified on the `show` profile (2026-10-06, 15:40 EEST)
+
+`make scale PROFILE=show` took 6 minutes, every replica Running on a new revision, images
+unchanged. Then `make verify-demo-paths PATHS="ep1 encore"`: **13/13**, encore 75 s.
+
+One thing the second replica changed: the warm hosted-agent sandbox lives in each web replica's
+memory, so a single warm-up left the other replica cold (Hosted agent shape 45 s instead of 16 s).
+`make warm` now sends four hosted triages in parallel, so both replicas hold a warm sandbox:
+afterwards four hosted triages took 16-22 s each.
 
 ### Fallback assets (Episode 1)
 

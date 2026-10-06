@@ -133,7 +133,10 @@ def main() -> int:
         "hosted agent": hosted_agent,
         "gateway round trip": gateway,
         "web triage, This app": web_triage("app"),
-        "web triage, Hosted agent": web_triage("hosted"),
+        # The warm hosted sandbox lives in each web replica's memory (shapes.py), and the show
+        # profile runs two. Cookie-less requests spread across replicas: four in parallel leave
+        # both holding a warm sandbox (measured 2026-10-06: one alone left a 45 s cold start).
+        **{f"web triage, Hosted agent #{i}": web_triage("hosted") for i in range(1, 5)},
     }
 
     def run(item: tuple[str, Callable[[], str]]) -> tuple[str, bool, float, str]:

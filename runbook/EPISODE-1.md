@@ -15,7 +15,7 @@ az login                       # fresh tokens; pick the ATLAS subscription
 azd auth login
 git status                     # must be clean
 make demo-reset                # under 60 s (measured 7-12 s)
-make warm                      # 12/12 WARM, about 35 s - includes one triage in each web shape
+make warm                      # 15/15 WARM, about 40 s - warms both web replicas' hosted sandbox
 make smoke                     # must say 5/5 before you go on air
 ```
 
