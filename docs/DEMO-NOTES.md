@@ -1146,8 +1146,8 @@ Nothing below changes between episodes except by `rollback.yml` or a rehearsed c
 | Prompt agent `atlas-triage-prompt` | **version 5** | Foundry portal, Agents |
 | Toolbox `atlas-tools` | default **version 13** | `project.toolboxes.get("atlas-tools")` |
 | Instructions | **v2** active (Cosmos pointer); packaged fallback v1 | `make inject NAME=weak_instructions` (status) |
-| Web image | `atlas/web-atlas@sha256:5bae7ce1718715bc6dc0e1cee3eb2de5ddf41c22527738367bdd843c1f0eac8c`, revision `azd-1791310087` (2026-10-06 night: JSON-reply rendering, throttle label) | `az containerapp show` |
-| Orchestrator image | `atlas/orchestrator-atlas@sha256:ba3a483b234c97dca0b8525dbf8c615daf222a7a3b0d2b10324c4be4251e1f75`, revision `--0000009` | same |
+| Web image | `atlas/web-atlas@sha256:26c1356a88246d22c118af82f9fff36eca4a7f18ee26faa2776e386fa1b2bac5`, revision `azd-1791312868` (2026-10-06 night: JSON-reply card, throttle label, error logging, New session restores examples, Run-in-workflow crash) | `az containerapp show` |
+| Orchestrator image | `atlas/orchestrator-atlas@sha256:0ebd51ad68c939ca3432c932c488656ade9c734d87b53e6f5754b757b7a03627`, revision `azd-1791312798` (2026-10-06 night: one workflow instance per run; failed resume returns to pending) | same |
 | Worker image | `atlas/worker-atlas@sha256:bd6efefab2ef9329787b61c799d4b2cd350628e8eb7836b6fc8b139bddbf04d8`, revision `--0000006` | same |
 | Function apps | `func-atlas-api`, `func-atlas-mcp`: Python 3.13, Flex Consumption, running | `az functionapp list` |
 | Container Apps replicas | **`show`** since 2026-10-06 15:38 EEST: web 2-10, orchestrator 2-10, worker 1-5. Revisions web `--0000009`, orch `--0000010`, worker `--0000007`, same images as above. `make scale PROFILE=work` returns to 1-3. | `make scale PROFILE=...` (never live) |
