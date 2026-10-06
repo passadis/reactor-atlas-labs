@@ -26,6 +26,12 @@ Open and arrange:
 - VS Code on the repo
 - a terminal
 
+**During the slides, about 5 minutes before the demo (around slide 15): run `make warm` again in a
+second terminal.** Read-only, 40 s, invisible to the room. Measured 2026-10-06: an idle hosted-agent
+sandbox is retired within about 17-25 minutes, on both web replicas. After that the first Hosted
+agent run took 51 s instead of 16-22 s. "This app" was unaffected (16 s). Forgot? Narrate the first
+Hosted agent run as "the sandbox waking up". It is.
+
 If `make smoke` is not 5/5: `make restore-baseline`, then `make smoke` again. If it is still red,
 use the fallback assets (end of page) for that part, and say so.
 
