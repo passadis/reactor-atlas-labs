@@ -658,7 +658,8 @@ resource cosmosAccountReaders 'Microsoft.Authorization/roleAssignments@2022-04-0
 // GitHub Actions authenticates with OIDC as this service principal. What it needs, nothing more:
 // - the quality gate: Foundry User on the project (evaluations, invoking a hosted-agent version);
 // - rollback and restore: Foundry Project Manager on the project (pin a hosted-agent version);
-// - the nightly apply/revert proof of the regression kit: Cosmos data (instructions pointer, chaos
+// - the nightly apply/revert proof of the regression kit: model embeddings (the knowledge
+//   injections), Cosmos data (instructions pointer, chaos
 //   document), Search index data (two knowledge injections), APIM service contributor scoped to
 //   the one APIM instance (one MCP tool description), Service Bus reader (DLQ depth in the smoke).
 resource apim 'Microsoft.ApiManagement/service@2024-05-01' existing = if (hasCi && !empty(apimName)) {
@@ -680,6 +681,19 @@ resource ciProjectManager 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   scope: foundryProject
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.foundryProjectManager)
+    principalId: ciPrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// The two knowledge injections embed their document before writing it to the index: an embeddings
+// call on the ACCOUNT's OpenAI endpoint, which project-scoped Foundry User does not cover (the
+// first scheduled nightly failed on it, 2026-10-06/07: "lacks ... deployments/embeddings/action").
+resource ciOpenAIUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (hasCi) {
+  name: guid(foundryAccount.id, ciPrincipalId, roles.cognitiveServicesOpenAIUser)
+  scope: foundryAccount
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.cognitiveServicesOpenAIUser)
     principalId: ciPrincipalId
     principalType: 'ServicePrincipal'
   }
