@@ -108,3 +108,4 @@ For a fresh one: `make e2e-remediation` (70-120 s).
 | Approval does not move the case | The console says if it could not be applied and offers it again: press Approve once more. Last resort: `make resume CASE=<id> APPROVE=1` (as the operator, a director). |
 | Approval refused | Check **act as** says myself. A refusal as manager is the Beat 4 point, not a failure. |
 | Orchestrator unreachable | The banner says so and chat still works. Show `docs/assets/phase06-*.png` and `phase07-*.png`. |
+| Anything else | Recorded outputs: `docs/assets/fallbacks/ep2-*.txt` (graph, manager refused, checkpoints, kill and resume, auto-approved) and screenshots `docs/assets/ep2-slide*.png`. |

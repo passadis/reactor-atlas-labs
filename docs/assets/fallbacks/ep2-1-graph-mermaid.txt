@@ -1,0 +1,25 @@
+Recorded 2026-10-07 against the deployed ATLAS (eastus2, show profile). Fallback for runbook/EPISODE-2.md.
+
+GET /api/workflow/graph?mode=graph - the deployed workflow, as the panel's Mermaid source shows it:
+
+flowchart TD
+  intake["intake (Start)"];
+  triage_agent["triage_agent"];
+  knowledge_agent["knowledge_agent"];
+  impact_agent["impact_agent"];
+  aggregate["aggregate"];
+  planner_agent["planner_agent"];
+  policy_gate["policy_gate"];
+  approval["approval"];
+  report["report"];
+  fan_in__aggregate__1628da01((fan-in))
+  impact_agent --> fan_in__aggregate__1628da01;
+  knowledge_agent --> fan_in__aggregate__1628da01;
+  fan_in__aggregate__1628da01 --> aggregate;
+  intake --> triage_agent;
+  triage_agent --> knowledge_agent;
+  triage_agent --> impact_agent;
+  aggregate --> planner_agent;
+  planner_agent --> policy_gate;
+  policy_gate --> approval;
+  approval --> report;

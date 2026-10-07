@@ -1,0 +1,10 @@
+Recorded 2026-10-07 against the deployed ATLAS (eastus2, show profile). Fallback for runbook/EPISODE-2.md.
+
+$ make kill-orchestrator
+== killing ca-atlas-orch-mkruniv7 (revision ca-atlas-orch-mkruniv7--azd-1791312798, 2 replica(s)) ==
+revision restart requested at 06:14:53; every replica is being replaced (in-memory state is lost)
+orchestrator back with 2 running replica(s) after 9s (healthy: yes)
+every old replica replaced after 80s (2 running, min 2) - approve and start cases from here
+
+Then, approved in the console as director:
+  CASE-28DB831E: completed / remediation succeeded 31 s after approving - resumed from the checkpoint, no agent re-ran.
