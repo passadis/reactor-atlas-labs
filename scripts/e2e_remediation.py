@@ -35,8 +35,9 @@ def web() -> httpx.Client:
                         headers={"Authorization": f"Bearer {cli_token()}"})
 
 
-def to_gate(client: httpx.Client, message: str, ttl: int | None = None) -> dict[str, Any]:
-    body: dict[str, Any] = {"message": message, "mode": "graph"}
+def to_gate(client: httpx.Client, message: str, ttl: int | None = None,
+            mode: str = "graph") -> dict[str, Any]:
+    body: dict[str, Any] = {"message": message, "mode": mode}
     if ttl:
         body["approval_ttl_minutes"] = ttl
     case_id = str(client.post("/api/workflow", json=body).raise_for_status().json()["case_id"])

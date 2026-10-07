@@ -625,7 +625,7 @@ to be executed. Different questions, different lifetimes.
 |---|---|
 | Canonical incident to `awaiting_approval` | 30-49 s |
 | Checkpoints written | 8-10, one per superstep |
-| Kill and recover (`make kill-orchestrator`) | **15.7 / 16.8 / 17.0 s** over three consecutive runs |
+| Kill and recover (`make kill-orchestrator`) | **15.7 / 16.8 / 17.0 s** over three consecutive runs (one replica). **Show profile, 2026-10-07: answers after 9 s, every old replica replaced after 80-91 s - approve only after the "replaced" line** (API-NOTES 22.6) |
 | Cold resume and complete | **1.6-1.9 s** |
 | Agents re-run on resume | none |
 | Approval refused for the wrong role | immediate, 403 |

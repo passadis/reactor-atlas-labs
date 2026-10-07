@@ -1976,3 +1976,17 @@ module lock. Touch both attributes once before starting the threads.
   three completed with remediation succeeded (30 s, 39 s, 14 s).
 - Also: model failures are now logged with their real text (`shapes._model_error`). New session
   restores the example prompts, with delegated click handling.
+
+### 22.6 A revision restart retires replicas one by one (2026-10-07)
+
+`make kill-orchestrator` restarts the active revision. Under the `show` profile (2 replicas) the
+app answered again after about 9 s, but the old replicas kept serving until they were replaced:
+**80-91 s** for every old one to be gone. A sequential case started about 2 minutes after a kill
+landed on the last old replica and died with it. The case stayed `pending` with no run, and no
+startup sweep covers it. The kill script now reports both moments, "back" and "replaced", and the
+Episode 2 runbook approves only after "replaced". The 80 s are filled with `make checkpoints`,
+which reads Cosmos directly. The Phase 07 figure of about 16 s was measured on one replica.
+
+The CI identity also lacked the right to call the embeddings model, which the two knowledge
+injections need. The first scheduled nightly runs failed on it (the restore step still ran and
+left everything at baseline). Fixed in rbac.bicep. Phase 13 is now 6/6.

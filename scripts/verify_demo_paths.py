@@ -180,6 +180,111 @@ def ep1() -> None:
     step(p, "5   show the contract (structured output)", contract)
 
 
+# ------------------------------------------------------------------------------------- ep2 --
+REPORTING = ("The internal reporting dashboards started returning 5xx errors at 13:50, a few "
+             "minutes after a reporting cache change. It is the staging reporting service, no "
+             "customer impact.")
+
+
+def ep2() -> None:
+    from scripts.e2e_remediation import follow, to_gate, web
+    from scripts.sse_probe import CANONICAL
+
+    p = "ep2"
+    reset(p)
+    client = web()
+    parked: dict[str, Any] = {}
+
+    def graphs() -> tuple[bool, str]:
+        seen = []
+        for mode in ("graph", "sequential_only", "handoff"):
+            topo = client.get("/api/workflow/graph",
+                              params={"mode": mode}).raise_for_status().json()
+            text = topo.get("mermaid", "")
+            seen.append(f"{mode}: {len([ln for ln in text.splitlines() if '-->' in ln])} edges")
+            if not text.startswith("flowchart"):
+                return False, f"{mode} has no Mermaid graph"
+        return True, "; ".join(seen)
+    step(p, "1   the live graph, three shapes", graphs)
+
+    def canonical() -> tuple[bool, str]:
+        started = time.perf_counter()
+        g = to_gate(client, CANONICAL)
+        parked.update(g)
+        req = g["parked"]
+        reasons = " ".join(req.get("reasons") or [])
+        ok = req.get("required_roles") == ["director"] and "break glass" in reasons
+        return ok, (f"{g['case_id']} parked in {time.perf_counter() - started:.0f} s, roles "
+                    f"{req.get('required_roles')}, break glass: {'break glass' in reasons}")
+    step(p, "2   canonical in workflow, gate parks it", canonical)
+
+    def decision_log() -> tuple[bool, str]:
+        doc = client.get(f"/api/workflow/{parked['case_id']}").raise_for_status().json()
+        decisions = ((doc.get("state") or {}).get("decisions")) or []
+        rules = [d.get("rule") or d.get("name") or "" for d in decisions]
+        return bool(decisions), f"{len(decisions)} decisions, e.g. {[r for r in rules if r][:3]}"
+    step(p, "3   typed state and the decision log", decision_log)
+
+    def policy_tests() -> tuple[bool, str]:
+        r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+                            "tests/test_policy.py"], cwd=ROOT, capture_output=True, text=True,
+                           timeout=300, check=False)
+        return r.returncode == 0, (r.stdout.strip().splitlines() or ["no output"])[-1][:120]
+    step(p, "4   policy.py: 1000 random plans, no model import", policy_tests)
+
+    def manager_refused() -> tuple[bool, str]:
+        r = client.post(f"/api/workflow/{parked['case_id']}/decision",
+                        headers={"x-atlas-act-as": "manager"},
+                        json={"decision": "approve", "comment": "as manager - must be refused"})
+        doc = client.get(f"/api/workflow/{parked['case_id']}").json()
+        ok = r.status_code == 403 and doc.get("status") == "awaiting_approval"
+        detail = str(r.json().get("detail"))[:90]
+        return ok, f"HTTP {r.status_code}: {detail}; case {doc.get('status')}"
+    step(p, "5   act as manager: refused, case still parked", manager_refused)
+
+    def checkpoints() -> tuple[bool, str]:
+        r = py("scripts.inspect_checkpoints", "--case", parked["case_id"], timeout=120)
+        rows = [ln for ln in r.stdout.splitlines() if "PARKED" in ln.upper()]
+        return r.returncode == 0 and bool(rows), f"{len(rows)} parked checkpoint(s)"
+    step(p, "6   make checkpoints CASE=... (parked)", checkpoints)
+
+    def kill_and_resume() -> tuple[bool, str]:
+        bash = shutil.which("bash") or "bash"
+        t0 = time.perf_counter()
+        k = subprocess.run([bash, "scripts/kill_orchestrator.sh"], cwd=ROOT, capture_output=True,
+                           text=True, timeout=400, check=False)
+        killed = time.perf_counter() - t0
+        t1 = time.perf_counter()
+        r = client.post(f"/api/workflow/{parked['case_id']}/decision",
+                        json={"decision": "approve", "comment": "approved after the kill"})
+        doc = follow(client, parked["case_id"])["doc"] if r.status_code < 300 else {}
+        rm = (doc or {}).get("remediation") or {}
+        ok = k.returncode == 0 and r.status_code < 300 and doc.get("status") == "completed"
+        return ok, (f"kill and recover {killed:.0f} s; approve HTTP {r.status_code}; "
+                    f"{doc.get('status')} / remediation {rm.get('status')} "
+                    f"{time.perf_counter() - t1:.0f} s after approving")
+    step(p, "7   make kill-orchestrator, then approve: resumes", kill_and_resume)
+
+    def auto_approved() -> tuple[bool, str]:
+        g = to_gate(client, REPORTING)
+        doc = follow(client, g["case_id"])["doc"]
+        gate = ((doc.get("state") or {}).get("policy")) or {}
+        rm = doc.get("remediation") or {}
+        ok = not g["parked"] and rm.get("status") == "succeeded"
+        return ok, (f"no approval asked: {not g['parked']}, auto-approved "
+                    f"{gate.get('auto_approved')}, remediation {rm.get('status')}")
+    step(p, "8   reporting-ttl: auto-approved, no human", auto_approved)
+
+    def sequential() -> tuple[bool, str]:
+        started = time.perf_counter()
+        g = to_gate(client, CANONICAL, mode="sequential_only")
+        took = time.perf_counter() - started
+        if not g["parked"]:
+            return False, f"sequential_only did NOT reach the gate ({g['case_id']}, {took:.0f} s)"
+        return True, f"sequential_only parks at the same gate in {took:.0f} s"
+    step(p, "9   switch shape: sequential only, same gate", sequential)
+
+
 # ---------------------------------------------------------------------------------- encore --
 def encore() -> None:
     p = "encore"
@@ -202,7 +307,7 @@ def not_written(name: str) -> Callable[[], None]:
 
 
 PATHS: dict[str, Callable[[], None]] = {
-    "ep1": ep1, "ep2": not_written("ep2"), "ep3": not_written("ep3"), "ep4": not_written("ep4"),
+    "ep1": ep1, "ep2": ep2, "ep3": not_written("ep3"), "ep4": not_written("ep4"),
     "encore": encore,
 }
 

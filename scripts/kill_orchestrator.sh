@@ -29,6 +29,12 @@ REV=$(az containerapp show -g "$RG" -n "$APP" \
 BEFORE=$(az containerapp replica list -g "$RG" -n "$APP" --revision "$REV" \
   --query "length(@)" -o tsv 2>/dev/null || echo "?")
 
+# The replicas alive now. A restart retires them one by one, not at once: a case started while an
+# old one is still serving can die with it (2026-10-07). "Back" is when the first new replica
+# answers; "replaced" is when no old one is left and the minimum is running again.
+OLD=$(az containerapp replica list -g "$RG" -n "$APP" --revision "$REV" --query "[].name" -o tsv   2>/dev/null | tr -d '' | tr '
+' ' ')
+MIN=$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.scale.minReplicas"   -o tsv 2>/dev/null | tr -d '')
 echo "== killing $APP (revision $REV, $BEFORE replica(s)) =="
 START=$(date +%s)
 
@@ -48,7 +54,7 @@ if [[ "$MODE" == "--scale-zero" ]]; then
   az containerapp update -g "$RG" -n "$APP" --min-replicas "${MIN0:-1}" --max-replicas "${MAX0:-3}" -o none
 else
   az containerapp revision restart -g "$RG" -n "$APP" --revision "$REV" -o none
-  echo "revision restarted at $(date -u +%H:%M:%S); every replica was terminated"
+  echo "revision restart requested at $(date -u +%H:%M:%S); every replica is being replaced (in-memory state is lost)"
 fi
 
 for _ in $(seq 1 90); do
@@ -68,6 +74,22 @@ done
 
 TOTAL=$(( $(date +%s) - START ))
 echo "orchestrator back with ${READY:-0} running replica(s) after ${TOTAL}s (healthy: $HEALTHY)"
+
+# Wait for the old replicas to be gone. An approval or a new case that lands on an old replica
+# while it is being retired can die with it (2026-10-07). On stage: narrate `make checkpoints`
+# (Cosmos, works while it is down) until the "replaced" line, then approve.
+for _ in $(seq 1 100); do
+  NOW=$(az containerapp replica list -g "$RG" -n "$APP" --revision "$REV"     --query "[?properties.runningState=='Running'].name" -o tsv 2>/dev/null | tr -d '')
+  LEFT=0; COUNT=0
+  for r in $NOW; do
+    COUNT=$((COUNT + 1))
+    for o in $OLD; do [[ "$r" == "$o" ]] && LEFT=$((LEFT + 1)); done
+  done
+  [[ "$LEFT" == "0" && "$COUNT" -ge "${MIN:-1}" ]] && break
+  sleep 3
+done
+REPLACED=$(( $(date +%s) - START ))
+echo "every old replica replaced after ${REPLACED}s ($COUNT running, min ${MIN:-1}) - approve and start cases from here"
 echo
 echo "The startup sweep finishes any case whose approval arrived while it was down."
 echo "Record this wall clock in docs/DEMO-NOTES.md (CLAUDE.md section 9.6)."
