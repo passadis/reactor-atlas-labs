@@ -338,6 +338,10 @@ verify-all: ## Every scripts/verify_phase*.sh, then smoke, security and all five
 	@echo "=== demo paths ===" && bash scripts/verify_demo_paths.sh
 	@echo "All verifications passed."
 
+.PHONY: trace-story
+trace-story: ## One case's trace told as a story, one line per step (CASE=CASE-XXXX)
+	$(PY) -m scripts.trace_story $(CASE)
+
 .PHONY: warm
 warm: ## T-10 routine: warm every surface the episode touches (read-only, about 35 s)
 	bash scripts/warm.sh
