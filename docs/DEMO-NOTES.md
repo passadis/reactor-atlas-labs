@@ -1202,3 +1202,30 @@ Slide screenshots are still to be taken together with the presenter.
 Runbooks and demo paths for Episodes 2-4; `verify_security.sh`; the ten chaos drills (several are
 control-plane changes, so never on an episode day); `docs/PUBLIC-README.md` and the architecture
 diagram; the full four-episode rehearsal.
+
+### Every outcome, end to end: `make e2e-batch` (2026-10-09)
+
+One command, from a cold `make demo-reset`, through the deployed system as the console drives it:
+
+| Run | What happens (measured 2026-10-09) | Time |
+|---|---|---|
+| approved | canonical: gate parks it, approved, ticket, 8 steps succeeded, completed | 103 s |
+| rejected | orders-stale: gate parks it, rejected, case `rejected`, **nothing dispatched** | 66 s |
+| auto | reporting-ttl: gate auto-approves (low risk, staging), remediates with no human | 49 s |
+| dead_letter | RB-0099 plan: step 2 fails 5 times, dead-letter queue at 54 s, `--fix` and replay, succeeded | 73 s |
+| rollback | Episode 4: bad version 8 pinned (does NOT flag the planted instruction), `rollback.yml` on GitHub, version 7 pinned, smoke 5/5 | 112 s (rollback.yml 56 s with queue) |
+
+```powershell
+make e2e-batch                              # all five, about 7 minutes
+make e2e-batch ONLY="approved dead_letter"  # some of them
+make trace-story CASE=<case id>             # follow any of them, 1-3 minutes later
+```
+
+The rollback run never leaves the bad build pinned: if anything fails, it re-pins the good version
+locally before the smoke check.
+
+**Watch for this.** The canonical case's approver depends on the plan the AI drafts. On 2026-10-09
+it asked for **manager or director**, not director only: that plan took no destructive step on the
+frozen payments service, so break glass did not apply. The gate was right about the plan in front
+of it. For a beat that needs "director only, the manager is refused", read the gate's reasons first.
+If break glass is not among them, say so - the reasons are the point.

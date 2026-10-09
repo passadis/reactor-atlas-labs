@@ -338,6 +338,10 @@ verify-all: ## Every scripts/verify_phase*.sh, then smoke, security and all five
 	@echo "=== demo paths ===" && bash scripts/verify_demo_paths.sh
 	@echo "All verifications passed."
 
+.PHONY: e2e-batch
+e2e-batch: ## Every outcome end to end: approved, rejected, auto, dead letter, rollback (ONLY=...)
+	$(PY) -m scripts.e2e_batch $(if $(ONLY),--only $(ONLY),)
+
 .PHONY: trace-story
 trace-story: ## One case's trace told as a story, one line per step (CASE=CASE-XXXX)
 	$(PY) -m scripts.trace_story $(CASE)
