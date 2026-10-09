@@ -12,6 +12,16 @@
   api:// URI (docs/API-NOTES.md 15.3). Two issuers for the same reason.
 -->
 <fragment>
+  <!-- An MCP tool invocation arrives without Authorization (APIM does not forward it) but with
+       the token the MCP scope already validated, in x-atlas-agent-authorization. Restore it, then
+       validate it exactly as any other call: same audience, issuer, signature and role. -->
+  <choose>
+    <when condition="@(!context.Request.Headers.ContainsKey("Authorization") && context.Request.Headers.GetValueOrDefault("x-atlas-agent-authorization", "") != "")">
+      <set-header name="Authorization" exists-action="override">
+        <value>@(context.Request.Headers.GetValueOrDefault("x-atlas-agent-authorization", ""))</value>
+      </set-header>
+    </when>
+  </choose>
   <validate-jwt header-name="Authorization" failed-validation-httpcode="401"
       failed-validation-error-message="A valid Entra token for api://atlas-gateway is required."
       require-scheme="Bearer" output-token-variable-name="atlas-jwt">

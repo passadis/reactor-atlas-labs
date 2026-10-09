@@ -194,7 +194,7 @@ resource opsMcpPolicy 'Microsoft.ApiManagement/service/apis/policies@2025-09-01-
     format: 'rawxml'
     value: loadTextContent('../../apim/policies/ops-mcp.xml')
   }
-  dependsOn: [opsMcp, policyFragments]
+  dependsOn: [opsMcp, policyFragments, agentKeyNamedValue]
 }
 
 // ------------------------------------------------------------------------ atlas-tools-mcp --
@@ -489,6 +489,22 @@ resource readonlyKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
     value: readonlySubscription.listSecrets().primaryKey
     contentType: 'APIM subscription key: atlas-inspect (product atlas-readonly)'
   }
+}
+
+// The agents' key as a named value, Key Vault-backed: read by the gateway's own identity, never
+// in source or settings. Used ONLY by the MCP scope (apim/policies/ops-mcp.xml), AFTER it has
+// validated the caller's token and Atlas.Agent role: a tool call from an MCP client (the Foundry
+// toolbox) carries no subscription key, and the ops and workflows APIs require one
+// (2026-10-08: every prompt-agent tool call returned 401 SubscriptionKeyNotFound).
+resource agentKeyNamedValue 'Microsoft.ApiManagement/service/namedValues@2024-05-01' = {
+  parent: apim
+  name: 'agents-subscription-key'
+  properties: {
+    displayName: 'agents-subscription-key'
+    secret: true
+    keyVault: { secretIdentifier: '${keyVault.properties.vaultUri}secrets/apim-agent-key' }
+  }
+  dependsOn: [agentKeySecret]
 }
 
 output opsUrl string = '${apim.properties.gatewayUrl}/ops'

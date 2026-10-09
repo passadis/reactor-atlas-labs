@@ -1990,3 +1990,37 @@ which reads Cosmos directly. The Phase 07 figure of about 16 s was measured on o
 The CI identity also lacked the right to call the embeddings model, which the two knowledge
 injections need. The first scheduled nightly runs failed on it (the restore step still ran and
 left everything at baseline). Fixed in rbac.bicep. Phase 13 is now 6/6.
+
+## 23. Phase 14, 2026-10-09
+
+### 23.1 The prompt agent's gateway tools never worked (found 2026-10-08, fixed 2026-10-09)
+
+Foundry toolbox -> APIM `atlas-ops-mcp` returned 200, but every tool call the MCP server made to its
+backing operation (`atlas-ops-api`, `atlas-workflows/enrich`) returned **401**:
+`SubscriptionKeyNotFound` and "A valid Entra token for api://atlas-gateway is required". Two causes:
+
+- APIM forwards request headers to MCP tool invocations **except `Authorization`**
+  ([secure-mcp-servers](https://learn.microsoft.com/azure/api-management/secure-mcp-servers),
+  "Forward tokens to backend").
+- The toolbox connection authenticates as the project's managed identity and sends **no
+  subscription key**, while the operations require one.
+
+Nothing exercised the path. The in-process agents read the MCP server's tool **descriptions** but
+call the REST API. The Phase 09 checks called the MCP server directly. The prompt agent answered
+honestly ("I could not reach the service catalogue") and Episodes 1-2 used only its knowledge
+search, so it looked fine. Consequence: the `enrich-incident` Logic App had never run.
+
+**Fix.** In the MCP scope (`ops-mcp.xml`), after the caller's token and `Atlas.Agent` role are
+validated, the policy:
+
+- attaches the agents' key from a **Key Vault-backed named value** (`agents-subscription-key`, read
+  by APIM's own identity);
+- carries the same token in `x-atlas-agent-authorization`.
+
+The shared `atlas-agent-auth` fragment restores `Authorization` from that header only when
+`Authorization` is absent. It then validates the token in full: audience, issuer, signature and
+role. Setting the header yourself therefore gains nothing.
+
+**Verified.** The prompt agent's `lookup_service` returns team-commerce. `enrich_incident` runs the
+Logic App (first run ever: Succeeded). New permanent check: `verify_demo_paths` ep1 step 1.3b calls
+both through the prompt agent.

@@ -12,6 +12,19 @@
     <include-fragment fragment-id="atlas-agent-auth" />
     <rate-limit-by-key calls="120" renewal-period="60" retry-after-header-name="Retry-After"
         counter-key="@((string)context.Variables["agent-id"])" />
+    <!-- Tool calls run as operations of atlas-ops-api / atlas-workflows, which require a
+         subscription key and an agent token. APIM forwards request headers to tool invocations
+         EXCEPT Authorization (learn.microsoft.com/azure/api-management/secure-mcp-servers), and an
+         MCP client such as the Foundry toolbox sends no key. So, only now that this request's
+         token and Atlas.Agent role are validated: attach the agents' key, and carry the SAME
+         token in a forwarded header. The operations validate that token again in full
+         (atlas-agent-auth), so setting the header yourself gains nothing. API-NOTES 23.1. -->
+    <set-header name="Ocp-Apim-Subscription-Key" exists-action="skip">
+      <value>{{agents-subscription-key}}</value>
+    </set-header>
+    <set-header name="x-atlas-agent-authorization" exists-action="override">
+      <value>@(context.Request.Headers.GetValueOrDefault("Authorization", ""))</value>
+    </set-header>
   </inbound>
   <backend>
     <forward-request />

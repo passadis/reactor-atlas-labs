@@ -108,6 +108,22 @@ def ep1() -> None:
                 f"{len(t['tools'])} tool calls, answers RB-0042: {'RB-0042' in t['text']}")
     step(p, "1.3 shape: Prompt agent", shape_prompt)
 
+    def prompt_gateway_tools() -> tuple[bool, str]:
+        # The prompt agent's ops tools go Foundry toolbox -> APIM MCP -> the ops API / the
+        # enrich-incident Logic App. Untested until 2026-10-09, and broken until then (401: no
+        # key, Authorization not forwarded to tool calls - API-NOTES 23.1).
+        t1 = probe("--mode", "prompt", "--message",
+                   "Use the lookup_service tool: who owns svc-orders and is it under a change "
+                   "freeze?")["first"]
+        t2 = probe("--mode", "prompt", "--message",
+                   "Enrich the incident on svc-orders over the last 60 minutes in one "
+                   "call.")["first"]
+        used = [x.split()[0] for x in t1["tools"] + t2["tools"]]
+        ok = ("team-commerce" in t1["text"] and any("enrich_incident" in u for u in used)
+              and "unauthorized" not in (t1["text"] + t2["text"]).lower())
+        return ok, f"tools {used}; owner found: {'team-commerce' in t1['text']}"
+    step(p, "1.3b prompt agent: gateway tools + enrich workflow", prompt_gateway_tools)
+
     def grounded(mode: str) -> Callable[[], tuple[bool, str]]:
         def run() -> tuple[bool, str]:
             t = probe("--mode", mode)["first"]
