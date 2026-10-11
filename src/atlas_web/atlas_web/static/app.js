@@ -505,9 +505,15 @@ async function runWorkflow(message) {
       <p class="muted">${r.needs_human ? "Needs a human before anything runs." : "No human review required by policy."}</p>`;
   });
   es.addEventListener("restored", (e) => {
-    prose.textContent = "This case already ran. Showing its stored result.";
-    const d = (JSON.parse(e.data).data || {}).result || {};
+    // Either the case ran before this page opened, or it was decided on another orchestrator
+    // replica while this stream waited: show the stored outcome, and follow any remediation.
+    const doc = JSON.parse(e.data).data || {};
+    const d = doc.result || {};
+    const status = doc.status || "decided";
+    hideApproval(`Decided: ${esc(status)}.`);
+    prose.textContent = `This case is ${status}. Showing its stored result.`;
     if (d.severity) $("#wf-sev").textContent = d.severity;
+    if (doc.case_id && status !== "rejected") watchRemediation(doc.case_id);
     done();
   });
   es.addEventListener("error", (e) => {

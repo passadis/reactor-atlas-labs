@@ -301,6 +301,66 @@ def ep2() -> None:
     step(p, "9   switch shape: sequential only, same gate", sequential)
 
 
+# ------------------------------------------------------------------------------------- ep3 --
+def ep3() -> None:
+    import re
+
+    from scripts.e2e_remediation import follow, to_gate, web
+    from scripts.sse_probe import CANONICAL
+
+    p = "ep3"
+    reset(p)
+
+    def full_action() -> tuple[bool, str]:
+        client = web()
+        g = to_gate(client, CANONICAL)
+        r = client.post(f"/api/workflow/{g['case_id']}/decision",
+                        json={"decision": "approve", "comment": "ep3 demo path"})
+        doc = follow(client, g["case_id"])["doc"] if r.status_code < 300 else {}
+        rm = (doc or {}).get("remediation") or {}
+        ok = doc.get("status") == "completed" and rm.get("status") == "succeeded"
+        return ok, (f"{g['case_id']}: ticket {(doc.get('ticket') or {}).get('ticket_id')}, "
+                    f"{rm.get('operation_id')} {rm.get('status')}")
+    step(p, "1   the full action: approve -> Service Bus -> worker", full_action)
+
+    def prompt_tools() -> tuple[bool, str]:
+        t = probe("--mode", "prompt", "--message",
+                  "Enrich the incident on svc-orders over the last 60 minutes in one "
+                  "call.")["first"]
+        used = [x.split()[0] for x in t["tools"]]
+        ok = any("enrich_incident" in u for u in used) and "unauthorized" not in t["text"].lower()
+        return ok, f"prompt agent through APIM MCP to the Logic App: {used}"
+    step(p, "2   one toolbox, MCP through the gateway, Logic App tool", prompt_tools)
+
+    def governance() -> tuple[bool, str]:
+        r = py("scripts.prove_governance", timeout=600)
+        m = re.search(r"(\d+)/(\d+) governance proofs passed", r.stdout)
+        ok = r.returncode == 0 and bool(m) and m.group(1) == m.group(2)
+        return ok, m.group(0) if m else (r.stdout.strip().splitlines() or ["no output"])[-1]
+    step(p, "3   make prove-governance (the core of the episode)", governance)
+
+    def no_keys() -> tuple[bool, str]:
+        pattern = re.compile(r"(AccountKey=|SharedAccessKey=|"
+                             r"api[-_]?key\s*[:=]\s*['\"][^'\"]{12,})", re.IGNORECASE)
+        hits = [str(f) for d in ("src", "functions", "infra") for f in (ROOT / d).rglob("*")
+                if f.is_file() and f.suffix in (".py", ".bicep", ".json", ".xml")
+                and pattern.search(f.read_text(encoding="utf-8", errors="ignore"))]
+        # The ONE expected hit (CLAUDE.md 7.9): Logic Apps Standard's own host storage, built at
+        # deploy time from listKeys() - the key is never in source. Say it on stage; it prints.
+        accepted = [h for h in hits if h.endswith("logicapps.bicep")]
+        rest = [h for h in hits if h not in accepted]
+        return not rest, ("no key material in src/, functions/, infra/ - one accepted exception: "
+                          "logicapps.bicep builds the Logic App host-storage connection from "
+                          "listKeys() at deploy time" if not rest else str(rest))
+    step(p, "4   no keys anywhere (grep)", no_keys)
+
+    def dead_letter() -> tuple[bool, str]:
+        r = py("scripts.e2e_batch", "--only", "dead_letter", timeout=900)
+        line = next((ln for ln in r.stdout.splitlines() if "dead_letter" in ln), "no output")
+        return r.returncode == 0, line.split("dead_letter", 1)[-1].strip()[:150]
+    step(p, "5   RB-0099: retries, dead letter, inspect, replay", dead_letter)
+
+
 # ---------------------------------------------------------------------------------- encore --
 def encore() -> None:
     p = "encore"
@@ -323,7 +383,7 @@ def not_written(name: str) -> Callable[[], None]:
 
 
 PATHS: dict[str, Callable[[], None]] = {
-    "ep1": ep1, "ep2": ep2, "ep3": not_written("ep3"), "ep4": not_written("ep4"),
+    "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": not_written("ep4"),
     "encore": encore,
 }
 

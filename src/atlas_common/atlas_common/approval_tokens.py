@@ -138,6 +138,26 @@ async def consume(store: CosmosStore, record: dict[str, Any], *, operation_id: s
     return True
 
 
+async def release(store: CosmosStore, record: dict[str, Any], *, operation_id: str) -> bool:
+    """Un-spend a token whose operation never reached the queue. Only the operation that spent it
+    may release it, so it can never un-spend someone else's: nothing ran, the approval stands.
+
+    Without this, the gateway's own retry of a failed enqueue met "the token has already been
+    spent" - and that is what the operator saw, instead of "the queue refused us" (2026-10-11).
+    """
+    rows = await store.query(APPROVALS, "SELECT * FROM c WHERE c.id = @id",
+                             [{"name": "@id", "value": record["id"]}],
+                             partition_key=record.get("case_id", ""))
+    current = rows[0] if rows else None
+    if not current or current.get("used_by_operation") != operation_id:
+        return False
+    body = {k: v for k, v in current.items() if not k.startswith("_")}
+    body.update({"used": False, "used_at": None, "used_by_operation": None,
+                 "released_after": operation_id})
+    await store.upsert(APPROVALS, body)
+    return True
+
+
 async def audit_refusal(store: CosmosStore, *, case_id: str, plan_id: str, code: str,
                         reason: str, correlation_id: str, caller: str = "") -> None:
     """Every refused submission leaves a record. Best effort: never mask the 403 itself."""

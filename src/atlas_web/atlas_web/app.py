@@ -585,6 +585,30 @@ def _routes(app: FastAPI) -> None:
     # decision to a signed-in human. `can_approve` is the same check the Phase 04 console uses,
     # so the two approval paths cannot drift apart.
 
+    @app.post("/api/workflow/{case_id}/dispatch")
+    async def workflow_redispatch(case_id: str, request: Request,
+                                  actor: ActorDep) -> dict[str, Any]:
+        """Retry the dispatch of an APPROVED case whose dispatch failed (gateway or queue down).
+
+        Approvers only. It authorises nothing new: the orchestrator re-checks that the case is
+        approved and not yet dispatched, and mints a fresh single-use token for the same plan.
+        Episode 3 Beat 4, after the Service Bus role comes back.
+        """
+        orchestrator_url()
+        if actor.entitlement is None or not actor.entitlement.may_approve_risk:
+            raise HTTPException(403, "Only an approver may retry a dispatch.")
+        try:
+            response = await atlas(request).orchestrator.post(
+                f"/cases/{case_id}/dispatch",
+                headers={"traceparent": current_traceparent() or ""},
+                timeout=ORCHESTRATOR_TIMEOUT)
+        except httpx.HTTPError as exc:
+            raise HTTPException(503, "The orchestrator is unreachable.") from exc
+        if response.status_code >= 400:
+            raise HTTPException(response.status_code,
+                                response.json().get("detail", "The orchestrator refused."))
+        return dict(response.json())
+
     @app.post("/api/workflow/{case_id}/decision")
     async def workflow_decision(case_id: str, body: WorkflowDecision, request: Request,
                                 actor: ActorDep) -> dict[str, Any]:

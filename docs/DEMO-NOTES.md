@@ -1229,3 +1229,23 @@ it asked for **manager or director**, not director only: that plan took no destr
 frozen payments service, so break glass did not apply. The gate was right about the plan in front
 of it. For a beat that needs "director only, the manager is refused", read the gate's reasons first.
 If break glass is not among them, say so - the reasons are the point.
+
+## Episode 3 ready (2026-10-11/12)
+
+- Runbook: `runbook/EPISODE-3.md`. Demo path: `make verify-demo-paths PATHS="ep3"`. Measured:
+  - full action 88 s;
+  - prompt agent to the enrich Logic App through APIM;
+  - prove-governance 9/9;
+  - no keys (one named exception);
+  - dead letter recovered.
+- Phases 08, 09 and 10 re-verified: 10/10, 19/19, 7/7. Tool-description change: prompt agent 28 s,
+  web 43 s, orchestrator 54 s, hosted agent 109 s.
+- The Service Bus role drill is recorded, never live: `docs/assets/fallbacks/ep3-4-*`. Revocation
+  took 236 s to bite, the case failed closed, recovery took 96 s, then the dispatch was retried.
+- Fixed while preparing it (API-NOTES 23.2, 23.3):
+  - a failed enqueue now says `queue_unavailable` instead of "token already spent";
+  - a case decided on the other orchestrator replica no longer looks undecided.
+- Deck `_labpack/Agents Take Action - ATLAS.pptx` corrected, with live screenshots (slides 9 and
+  14). Original kept locally.
+- Open, not blocking: the knowledge agent was slow in three runs (38-46 s against 10-13 s).
+  Investigate before Episode 4.

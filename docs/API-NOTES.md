@@ -2024,3 +2024,46 @@ role. Setting the header yourself therefore gains nothing.
 **Verified.** The prompt agent's `lookup_service` returns team-commerce. `enrich_incident` runs the
 Logic App (first run ever: Succeeded). New permanent check: `verify_demo_paths` ep1 step 1.3b calls
 both through the prompt agent.
+
+### 23.2 A failed enqueue looked like a spent token (found by the Episode 3 drill)
+
+The ops API spends the approval token, writes the operation (`queued`), then sends to Service Bus.
+With the Sender role revoked, the send failed. The token stayed spent, and the operation said
+`queued` for work that never reached the queue. Then **APIM's retry policy** (1 + 3 on 5xx) resent
+the same request and met "the token has already been spent". That 403 is what the operator saw,
+instead of "the queue refused us".
+
+**Fix.** On an enqueue failure the operation is marked `enqueue_failed`, the token is **released**
+(`approval_tokens.release`: only by the operation that spent it, so it can never un-spend someone
+else's), the idempotency key is released, and the answer is a typed **503 `queue_unavailable`**.
+The gateway's retries now meet the same honest 503. Once the queue accepts again, the same token
+goes through. The web app gained `POST /api/workflow/{id}/dispatch` (approvers only) to retry a
+failed dispatch. The orchestrator re-checks the case and mints a fresh token.
+
+**The drill, measured** (`scripts/drill_servicebus_role.py`, never live):
+
+- the revoked role took effect after **236 s**, because a running workload keeps its cached token;
+- the approved case stayed `approved` and nothing ran;
+- the restored role took effect after **96 s**, then the dispatch was retried and the case
+  completed.
+
+Also: Git Bash rewrites `/subscriptions/...` arguments into Windows paths, so `az role assignment
+delete --scope` failed silently in the first attempt. Scripts that pass Azure ids set
+`MSYS_NO_PATHCONV=1`.
+
+### 23.3 A case decided on one replica looked undecided on the other
+
+A parked case waits in the memory of the replica that ran it (A), for up to 5 minutes. When the
+approve or reject lands on the other replica (B), B resumes it from the checkpoint and finishes
+it. That is correct, but A kept serving its in-memory copy:
+
+- `GET` requests landing on A returned `awaiting_approval` after a rejection;
+- the console, which streams from A, kept saying "waiting on a human".
+
+A never overwrote B's result (its timeout path returns before saving). **Fix:**
+
+- while a case is awaiting approval, `get()` trusts Cosmos over memory;
+- the waiting replica checks Cosmos every 5 s, and if another replica decided the case, it sends
+  the console a `restored` event with the stored outcome and stops waiting.
+
+Verified 2026-10-12: approve and reject, three rounds each, all correct.

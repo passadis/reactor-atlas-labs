@@ -82,6 +82,12 @@ RUN_TIMEOUT_S = 420.0
 # point - it stays `awaiting_approval` in Cosmos with its checkpoint, and approving later resumes
 # it cold. This only bounds how long one browser connection is held open.
 APPROVAL_WAIT_S = 300.0
+# While a case waits on a human, how often its holding replica checks whether ANOTHER replica has
+# already answered it (the cold path). Without this, the console - streaming from the holding
+# replica - kept saying "waiting on a human" for up to APPROVAL_WAIT_S after the case was decided
+# elsewhere (2026-10-11, API-NOTES 23.3).
+RESOLVED_ELSEWHERE_POLL_S = 5.0
+WAITING_STATUSES = (None, "pending", "awaiting_approval")
 
 # Fixed order, because the planner needs the other three. Used only to fill gaps the handoff mesh
 # left behind; the graph shapes get their order from the edges.
@@ -307,6 +313,11 @@ class CaseRunner:
         """
         run = self._runs.get(case_id)
         if run is not None and run.case is not None and not run.done:
+            if run.case.status == "awaiting_approval":
+                # Another replica may have decided it (the cold path): Cosmos is the truth.
+                stored = await self.cases.get(case_id)
+                if stored is not None and stored.get("status") not in WAITING_STATUSES:
+                    return stored
             doc: dict[str, Any] = {
                 "id": case_id, "case_id": case_id, "status": run.case.status,
                 "mode": run.case.mode, "state": run.case.model_dump(mode="json"),
@@ -434,12 +445,8 @@ class CaseRunner:
         while suspended:
             if run.case is None:
                 run.case = await self._case_from_store(run.case_id)
-            try:
-                answer = await asyncio.wait_for(run.answers.get(), APPROVAL_WAIT_S)
-            except TimeoutError:
-                run.publish(self._event(run, "awaiting_approval", node=APPROVAL, data={
-                    "message": "still waiting on a human; the case is checkpointed and resumable",
-                    "waited_s": APPROVAL_WAIT_S}))
+            answer = await self._wait_for_answer(run)
+            if answer is None:
                 return
             # No `checkpoint_id` here, deliberately. This workflow object is still holding the
             # pending request, and restoring a checkpoint over it overwrites that cycle:
@@ -455,6 +462,27 @@ class CaseRunner:
         if run.case is not None:
             await self.cases.save(run.case, run.report)
             await self.cases.close_approval(run.case)
+
+    async def _wait_for_answer(self, run: Run) -> ApprovalResponse | None:
+        """An answer for this replica's live run - or None: decided elsewhere, or the wait ended.
+
+        Never saves anything on the way out: the replica that decided the case owns its state.
+        """
+        deadline = time.monotonic() + APPROVAL_WAIT_S
+        while True:
+            try:
+                return await asyncio.wait_for(run.answers.get(), RESOLVED_ELSEWHERE_POLL_S)
+            except TimeoutError:
+                pass
+            stored = await self.cases.get(run.case_id)
+            if stored is not None and stored.get("status") not in WAITING_STATUSES:
+                run.publish(self._event(run, "restored", node=APPROVAL, data=stored))
+                return None
+            if time.monotonic() >= deadline:
+                run.publish(self._event(run, "awaiting_approval", node=APPROVAL, data={
+                    "message": "still waiting on a human; the case is checkpointed and resumable",
+                    "waited_s": APPROVAL_WAIT_S}))
+                return None
 
     async def _run_handoff(self, run: Run, request: IntakeRequest) -> None:
         """The handoff shape as a case run: the deterministic bookends, an agent-routed middle."""

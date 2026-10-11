@@ -480,9 +480,25 @@ async def submit_remediation(deps: Deps, body: Any, idempotency_key: str | None,
         await asyncio.wait_for(deps.store.upsert(APPROVALS, operation), STORE_TIMEOUT_S)
         # MessageId = plan_id: Service Bus duplicate detection makes a resubmitted plan a no-op
         # inside the window, on top of the idempotency key above.
-        await deps.enqueue(message_id=command.plan_id, session_id=session_id, correlation=cid,
-                           body={"operation_id": operation_id, "case_id": command.case_id,
-                                 "plan_id": command.plan_id, "submitted_at": now})
+        try:
+            await deps.enqueue(message_id=command.plan_id, session_id=session_id,
+                               correlation=cid,
+                               body={"operation_id": operation_id, "case_id": command.case_id,
+                                     "plan_id": command.plan_id, "submitted_at": now})
+        except Exception as exc:
+            # Nothing reached the queue, so nothing used the token: give it back, record the
+            # attempt truthfully, and say what happened. Otherwise the gateway's own retry met
+            # "the token has already been spent" and that is all the operator saw
+            # (2026-10-11, API-NOTES 23.2). A typed 503: the gateway retries it, then relays it.
+            log.warning("enqueue refused for %s: %s", operation_id, exc)
+            operation.update(status="enqueue_failed", updated_at=_now().isoformat(),
+                             detail=f"never reached the queue: {type(exc).__name__}")
+            await asyncio.wait_for(deps.store.upsert(APPROVALS, operation), STORE_TIMEOUT_S)
+            await approval_tokens.release(deps.store, checked.record, operation_id=operation_id)
+            await release_key(deps.store, "remediation", idempotency_key)
+            return error(503, "queue_unavailable",
+                         "the remediation queue refused the command; nothing was queued and the "
+                         "approval stands - retry once the queue accepts it", cid)
         public = _public_operation(operation)
         result = Result(202, public,
                         {"Location": f"/api/remediation/operations/{operation_id}"})

@@ -267,6 +267,31 @@ def test_a_valid_token_queues_the_plan_once() -> None:
     assert deps.sent[0]["message_id"] == "0123456789abcdef", "MessageId must be the plan id"
 
 
+def test_a_failed_enqueue_fails_closed_and_says_so() -> None:
+    """Episode 3 Beat 4: the ops API loses its Service Bus Sender role. Nothing may run, the
+    operation must not claim to be queued, and a retry with a fresh token must go through."""
+    class NoSendDeps(FakeDeps):
+        async def enqueue(self, **_: Any) -> None:
+            raise PermissionError("Unauthorized: Send claim required")
+
+    deps = NoSendDeps()
+    token = mint(deps)
+    failed = submit(deps, token)
+    assert failed.status == 503 and failed.body["code"] == "queue_unavailable"
+    assert not deps.sent
+    ops = [d for d in deps.store.data.get("approvals", {}).values() if d.get("kind") == "operation"]
+    assert [o["status"] for o in ops] == ["enqueue_failed"]
+
+    # The gateway retries a 5xx with the SAME request: it must meet the same honest 503, not
+    # "the token has already been spent" (what the operator saw on 2026-10-11).
+    again = submit(deps, token)
+    assert again.status == 503 and again.body["code"] == "queue_unavailable"
+
+    deps.__class__ = FakeDeps  # the role is back: the same token, never used, now goes through
+    retried = submit(deps, token)
+    assert retried.status == 202 and len(deps.sent) == 1
+
+
 def test_a_forged_token_is_refused_and_audited() -> None:
     deps = FakeDeps()
     mint(deps)
