@@ -249,7 +249,9 @@ def dlq_fires() -> None:
 def content_capture() -> None:
     rows = ai().query(
         "traces | where message startswith 'CONTENT CAPTURE IS ON' "
-        "| summarize latest = max(timestamp) by cloud_RoleName", "P2D")
+        "| summarize latest = max(timestamp) by cloud_RoleName", "P30D")
+    # 30 days, not 2: each process announces capture ONCE, when it starts - and a container that
+    # has run since a deploy three days ago is announced three days back (2026-10-14).
     roles = {str(r["cloud_RoleName"]) for r in rows}
     spans = ai().query(
         "dependencies | where name startswith 'chat ' "

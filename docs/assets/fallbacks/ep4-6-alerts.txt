@@ -1,0 +1,10 @@
+Recorded 2026-10-14 against the deployed ATLAS (eastus2, show profile). Fallback for runbook/EPISODE-4.md.
+
+$ make verify-phase11   (the alert lines)
+PASS  4a every alert rule exists, is enabled, and targets the ops action group
+      (9/9 enabled: eval-regression, injection-canary, tool-error-rate, e2e-latency, token-burn,
+       approval-timeouts, model-throttling, web-availability, dlq-depth)
+PASS  4b a dead-lettered command fires the DLQ alert on the ops action group
+      (OP-DEFBF1C4146A injected 2026-10-14T19:09:07Z: alert New Sev1 started 19:13:34Z,
+       287 s after injection; replay rc 0)
+PASS  6 the availability test is green from all three regions (West US, East US, West Europe)

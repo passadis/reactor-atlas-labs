@@ -2067,3 +2067,19 @@ A never overwrote B's result (its timeout path returns before saving). **Fix:**
   the console a `restored` event with the stored outcome and stops waiting.
 
 Verified 2026-10-12: approve and reject, three rounds each, all correct.
+
+### 23.4 The knowledge agent is not getting slower: its tail is long (2026-10-14)
+
+Three runs between 10-07 and 10-11 had the knowledge agent at 38-46 s, against the 10-13 s first
+measured. Two weeks of Application Insights data, in 2-day buckets:
+
+- the knowledge node holds a **p50 of 11.6-14.6 s** and a **p90 of about 21 s**, with no trend;
+- its tools are fast and steady (`search_knowledge` 0.3-0.4 s, `get_incident` 0.1 s);
+- the triage, impact and planner nodes show the same shape.
+
+The outliers are model tail latency, not a regression. Nothing to fix. It is the honest sentence
+for the Episode 4 latency chart: the model is the long pole, and its tail is long.
+
+Also: `verify_phase11` check 5 looked for each process's "CONTENT CAPTURE IS ON" startup line in
+the last 2 days. A container that has run since a deploy 3 days ago announced it 3 days back, so
+the check failed although capture was on. The window is now 30 days.

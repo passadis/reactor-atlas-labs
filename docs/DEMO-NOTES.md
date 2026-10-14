@@ -1249,3 +1249,20 @@ If break glass is not among them, say so - the reasons are the point.
   14). Original kept locally.
 - Open, not blocking: the knowledge agent was slow in three runs (38-46 s against 10-13 s).
   Investigate before Episode 4.
+
+## Episode 4 ready (2026-10-14)
+
+- Runbook: `runbook/EPISODE-4.md`. Demo path: `make verify-demo-paths PATHS="ep4"` 7/7, covering:
+  - a case end to end;
+  - trace-story (15 lines) and trace-check (every hop, one trace id);
+  - the evaluation evidence;
+  - the bad build pinned then rolled back (rollback.yml 101 s with queue, 56 s on 10-09);
+  - 9/9 alerts, the workbook and the governance page.
+- Phase 11: 13/13 (DLQ alert fired 287 s after a dead letter). Phase 13: 6/6.
+- Changed from the lab pack (CLAUDE.md 9):
+  - Beat 4 shows the committed evaluation reports, not a live 45-minute run;
+  - Beat 5 breaks the agent by pinning the pre-deployed bad build (a pointer flip), not by an APIM
+    write;
+  - Beat 6 shows the alert history; canary is descoped.
+- Fallbacks: `docs/assets/fallbacks/ep4-*`.
+- Knowledge-agent latency investigated (API-NOTES 23.4): model tail latency, no regression.

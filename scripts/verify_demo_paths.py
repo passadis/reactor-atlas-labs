@@ -361,6 +361,76 @@ def ep3() -> None:
     step(p, "5   RB-0099: retries, dead letter, inspect, replay", dead_letter)
 
 
+# ------------------------------------------------------------------------------------- ep4 --
+def ep4() -> None:
+    p = "ep4"
+    reset(p)
+    case: dict[str, str] = {}
+
+    def run_case() -> tuple[bool, str]:
+        r = py("scripts.e2e_remediation", "--json", timeout=400)
+        d = as_json(r.stdout)
+        case["id"] = d["case_id"]
+        return r.returncode == 0, f"{d['case_id']}: {d['case_status']} / {d['remediation_status']}"
+    step(p, "1   a case end to end (to trace)", run_case)
+
+    def story() -> tuple[bool, str]:
+        want = ("POLICY GATE", "HUMAN", "DISPATCH", "WORKER", "DONE")
+        text = ""
+        for _ in range(20):  # telemetry lands 1-3 minutes after the run
+            r = py("scripts.trace_story", case["id"], timeout=180)
+            text = r.stdout
+            if all(w in text for w in want):
+                break
+            time.sleep(20)
+        missing = [w for w in want if w not in text]
+        lines = sum(1 for ln in text.splitlines() if ln.strip().startswith("t+"))
+        return not missing, f"{lines} story lines" + (f"; missing {missing}" if missing else "")
+    step(p, "2   make trace-story: the case in 15 lines", story)
+
+    def one_trace() -> tuple[bool, str]:
+        r = py("scripts.trace_check", case["id"], "--wait", "180", timeout=400)
+        passes = [ln for ln in r.stdout.splitlines() if ln.startswith("PASS")]
+        fails = [ln for ln in r.stdout.splitlines() if ln.startswith("FAIL")]
+        return r.returncode == 0, f"{len(passes)} PASS, {len(fails)} FAIL" + (
+            f": {fails[0][6:80]}" if fails else " - every hop on one trace id")
+    step(p, "3   make trace-check: every hop, one trace", one_trace)
+
+    def evidence() -> tuple[bool, str]:
+        reports = ROOT / "evals" / "reports"
+        good = (reports / "gate-good.md").read_text(encoding="utf-8")
+        bad = (reports / "gate-bad.md").read_text(encoding="utf-8")
+        red = (reports / "redteam-latest.md").read_text(encoding="utf-8")
+        comparison = (reports / "instructions-comparison.md").exists()
+        ok = ("**PASS**" in good and "**FAIL**" in bad and "Prohibited-action ASR: **0%**" in red
+              and comparison)
+        return ok, ("gate good PASS, bad FAIL; red team 0% prohibited; v0/v1/v2 comparison"
+                    if ok else "an evaluation report is missing or changed")
+    step(p, "4   the evaluation evidence (committed reports)", evidence)
+
+    def regression() -> tuple[bool, str]:
+        r = py("scripts.e2e_batch", "--only", "rollback", timeout=1200)
+        line = next((ln for ln in r.stdout.splitlines()
+                     if ln.startswith(("PASS", "FAIL")) and "rollback" in ln), "no output")
+        return r.returncode == 0, line.split("rollback", 1)[-1].strip()[:170]
+    step(p, "5   the bad build pinned, then rollback.yml", regression)
+
+    def operations() -> tuple[bool, str]:
+        from scripts import verify_phase11 as v11
+
+        rules = [r for r in v11._arm_list("Microsoft.Insights/scheduledQueryRules", "2023-12-01")
+                 + v11._arm_list("Microsoft.Insights/metricAlerts", "2018-03-01")
+                 if str(r["name"]).startswith("alert-atlas-")]
+        enabled = [r for r in rules if r["properties"].get("enabled")]
+        workbook = os.environ.get("ATLAS_WORKBOOK_ID", "")
+        wb_ok = bool(workbook) and bool(v11.arm_get(f"{workbook}?api-version=2022-04-01"))
+        governance = (ROOT / "docs" / "AGENT-GOVERNANCE.md").exists()
+        ok = len(rules) == 9 and len(enabled) == 9 and wb_ok and governance
+        return ok, (f"{len(enabled)}/{len(rules)} alert rules enabled; workbook "
+                    f"{'deployed' if wb_ok else 'MISSING'}; governance page present")
+    step(p, "6   alerts, workbook, governance", operations)
+
+
 # ---------------------------------------------------------------------------------- encore --
 def encore() -> None:
     p = "encore"
@@ -383,7 +453,7 @@ def not_written(name: str) -> Callable[[], None]:
 
 
 PATHS: dict[str, Callable[[], None]] = {
-    "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": not_written("ep4"),
+    "ep1": ep1, "ep2": ep2, "ep3": ep3, "ep4": ep4,
     "encore": encore,
 }
 
