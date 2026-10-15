@@ -14,8 +14,8 @@ discrepancy is recorded here.
 |---|---|---|
 | Date of baseline | 2026-09-15 | — |
 | Python | **3.13.13** (`uv python install 3.12` also present but unused) | `uv run python -V` |
-| Subscription | `AzureDev` / `c6e08b90-7ae0-4f00-8478-a1d4e73991d2` | `az account show` |
-| Tenant | `35de4c50-7dcd-4871-8685-61789c017da2` (VISUALSTUDIO-MCT) | `az account show` |
+| Subscription | `AzureDev` (id redacted) | `az account show` |
+| Tenant | id redacted | `az account show` |
 | Primary region | **`eastus2`** (fallback `swedencentral`) | see section 5 |
 | azd | 1.34.0 | `azd version` |
 | az | 2.90.0 | `az version` |

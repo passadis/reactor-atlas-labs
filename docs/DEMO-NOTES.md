@@ -390,7 +390,7 @@ container). Same UI, same activity panel, same structured card.
 | Toolbox | `atlas-tools` | **v1** (default) | knowledge index; ops MCP + Logic Apps join in Phases 09-10 |
 | Web app | `ca-atlas-web-mkruniv7` | revision `azd-1789834232` | |
 
-Agent identity (object id): `95f4f0a7-a599-4ed8-a9f3-67f8301a2d0a` - Cosmos Data Reader, Search
+Agent identity (object id redacted; `az ad sp list --display-name <agent>`) - Cosmos Data Reader, Search
 Index Data Reader, Cognitive Services OpenAI User.
 
 ### What to show
@@ -1088,7 +1088,7 @@ evaluation live; at most re-run `make eval-local` on a recorded run (seconds).
 | Regression kit (`make inject NAME=... ACTION=apply\|revert\|status`) | Five reversible breakages: `bad_tool_description`, `weak_instructions`, `latency` (4 s per ops API call), `stale_knowledge`, `prompt_injection`. Each is a data or config write, never a deploy. |
 | `make restore-baseline` | Reverts all five, pins the good version, runs the smoke check. |
 | `make smoke` | 5 checks: web health, every injection at baseline, instructions pointer, pinned version, empty DLQ. |
-| GitHub Actions (private repo `passadis/reactor-atlas-labs`, OIDC only, no secrets) | `ci.yml` (lint, types, tests, APIM policy XML, "changed instructions need a new evaluation"), `agent-quality-gate.yml` (the gate, evaluate-only), `rollback.yml` (pin flip + smoke, under 3 min), `nightly-restore.yml` (03:00 apply-all then restore, refuses within 6 h of an episode). |
+| GitHub Actions (public repo `passadis/reactor-atlas-labs`, OIDC only, no secrets) | `ci.yml` (lint, types, tests, APIM policy XML, "changed instructions need a new evaluation"), `agent-quality-gate.yml` (the gate, evaluate-only), `rollback.yml` (pin flip + smoke, under 3 min), `nightly-restore.yml` (03:00 apply-all then restore, refuses within 6 h of an episode). |
 | `docs/AGENT-GOVERNANCE.md`, `docs/CHANGELOG-agent.md` | Who may change what, and every agent change with the evaluation that measured it. |
 
 ### The numbers (2026-10-05)
