@@ -56,7 +56,10 @@ async def run_once(settings: Settings) -> dict[str, Any]:
 async def main() -> int:
     load_local_env()
     base = Settings.from_env()
-    url = os.environ.get("ATLAS_OPS_API_URL") or "https://func-atlas-api-mkruniv7.azurewebsites.net/api"
+    url = os.environ.get("ATLAS_OPS_API_URL", "")
+    if not url:
+        print("set ATLAS_OPS_API_URL (azd env get-value ATLAS_APIM_OPS_URL)", file=sys.stderr)
+        return 2
     direct = await run_once(replace(base, ops_api_url=""))
     http = await run_once(replace(base, ops_api_url=url))
 
