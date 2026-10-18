@@ -126,3 +126,4 @@ service the report implicates, grade from the reported impact, say that it is un
 your confidence. Never choose Sev4 while the report describes customers affected.
 
 State in `reasoning_notes` which row you applied and the measured values that put you there, briefly.
+
