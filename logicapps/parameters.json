@@ -1,0 +1,26 @@
+{
+  "webCallbackUrl": {
+    "type": "String",
+    "value": "@appsetting('ATLAS_WEB_CALLBACK_URL')"
+  },
+  "webAudience": {
+    "type": "String",
+    "value": "@appsetting('ATLAS_WEB_AUDIENCE')"
+  },
+  "logicIdentityId": {
+    "type": "String",
+    "value": "@appsetting('ATLAS_LOGIC_IDENTITY_ID')"
+  },
+  "gatewayUrl": {
+    "type": "String",
+    "value": "@appsetting('ATLAS_GATEWAY_URL')"
+  },
+  "gatewayAudience": {
+    "type": "String",
+    "value": "@appsetting('ATLAS_GATEWAY_AUDIENCE')"
+  },
+  "apimKey": {
+    "type": "String",
+    "value": "@appsetting('ATLAS_APIM_KEY')"
+  }
+}

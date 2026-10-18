@@ -1,0 +1,7 @@
+// Section 2 - Tool failures over time, per backend and reason (timeout, unavailable, error).
+traces
+| where customDimensions["atlas.event"] == "tool.failure"
+| summarize failures = count()
+    by bin(timestamp, 15m), backend = tostring(customDimensions["atlas.backend"]),
+       reason = tostring(customDimensions["atlas.reason"])
+| order by timestamp asc

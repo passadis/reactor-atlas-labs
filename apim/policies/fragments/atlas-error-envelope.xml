@@ -1,0 +1,32 @@
+<!--
+  atlas-error-envelope: every gateway-generated error is the same shape as the ops API's own,
+  {code, message, correlation_id}, with no internal detail. Used in on-error of the REST APIs only:
+  MCP servers must never have their response body touched (it breaks streaming).
+-->
+<fragment>
+  <set-header name="Content-Type" exists-action="override">
+    <value>application/json</value>
+  </set-header>
+  <set-body>@{
+      var status = context.Response == null ? 500 : context.Response.StatusCode;
+      var code = status == 429 ? "rate_limited"
+               : status == 401 ? "unauthorized"
+               : status == 403 ? "forbidden"
+               : status == 400 ? "invalid_request"
+               : status == 413 ? "invalid_request"
+               : status == 504 ? "backend_timeout"
+               : "gateway_error";
+      var reason = context.LastError == null ? "" : context.LastError.Reason;
+      var message = code == "invalid_request" ? "The request does not match the API contract."
+                  : code == "rate_limited" ? "Too many requests. Retry after the interval in Retry-After."
+                  : code == "backend_timeout" ? "The operations backend did not answer in time."
+                  : code == "unauthorized" ? "A valid Entra token for api://atlas-gateway is required."
+                  : "The gateway could not complete the request.";
+      return new JObject(
+          new JProperty("code", code),
+          new JProperty("message", message),
+          new JProperty("gateway_reason", reason),
+          new JProperty("correlation_id", (string)context.Variables.GetValueOrDefault("correlation-id", ""))
+      ).ToString();
+  }</set-body>
+</fragment>

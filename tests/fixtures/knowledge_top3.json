@@ -1,0 +1,10 @@
+{
+  "must_rank_first": "RB-0042",
+  "query": "checkout latency after payments deploy",
+  "scope": "doc_type eq 'runbook'",
+  "top3": [
+    "RB-0042",
+    "RB-0031",
+    "RB-0056"
+  ]
+}

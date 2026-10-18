@@ -1,0 +1,58 @@
+Recorded 2026-10-06 against the deployed ATLAS (eastus2). Fallback for runbook/EPISODE-1.md.
+
+$ bash scripts/chaos/ops_api_down.sh --apply
+ops API chaos flag ON for 120 s (workers pick it up within 3 s)
+
+--- This app, canonical report, ops API down ---
+Activity panel:
+  lookup_service 15002ms failed
+  get_telemetry 15002ms failed
+  search_knowledge 399ms ok
+  search_knowledge 355ms ok
+  get_recent_changes 15002ms failed
+  get_recent_changes 15002ms failed
+  compute_blast_radius 1ms ok
+
+{
+  "severity": "Sev2",
+  "category": "deployment",
+  "affected_services": [
+    "svc-checkout-api",
+    "svc-payments"
+  ],
+  "likely_cause": "Most likely a regression introduced by the payments deployment reported just before symptoms began at 14:05, with payments confirmed as an upstream dependency because failure of `svc-payments` affects `svc-checkout-api`. Similar historical incidents include deployment-caused degradations on both Checkout API and Payments, but I could not confirm the exact change or measure onset because the change log, telemetry store, and service catalogue were unavailable.",
+  "confidence": 0.41,
+  "suspected_change_ids": [],
+  "summary": "Checkout is likely experiencing a customer-facing degradation rather than full outage: the report says about 20% of EU customers are timing out, which fits Sev2 if confirmed. The strongest grounded hypothesis is a payments-side deployment regression propagating to `svc-checkout-api`, but key systems needed to confirm telemetry, service metadata, and exact recent changes were unavailable.",
+  "citations": [
+    {
+      "doc_id": "RB-0042",
+      "title": "RB-0042 Mitigating elevated p95 latency on Checkout API",
+      "last_reviewed": "2026-01-14",
+      "relevance": 0.94
+    },
+    {
+      "doc_id": "RB-0060",
+      "title": "RB-0060 Mitigating elevated p95 latency on Payments",
+      "last_reviewed": "2026-08-12",
+      "relevance": 0.77
+    },
+    {
+      "doc_id": "INC-2026-0320",
+      "title": "INC-2026-0320 Payments deployment degradation",
+      "last_reviewed": "2026-08-05",
+      "relevance": 0.84
+    },
+    {
+      "doc_id": "INC-2026-0122",
+      "title": "INC-2026-0122 Checkout Api deployment degradation",
+      "last_reviewed": "2025-11-01",
+      "relevance": 0.62
+    }
+  ],
+  "needs_human": true,
+  "reasoning_notes": "Applied Sev2 from reported partial customer impact: ~20% timeouts, not full unavailability. Telemetry, service catalogue, and change log all failed, so impact is unmeasured and no change id could be confirmed. Blast radius from svc-payments includes Tier 1 svc-checkout-api."
+}
+
+$ bash scripts/chaos/ops_api_down.sh --revert
+ops API chaos flag off (workers pick it up within 3 s)

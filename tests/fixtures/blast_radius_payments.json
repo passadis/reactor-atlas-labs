@@ -1,0 +1,72 @@
+{
+  "affected_count": 10,
+  "affected_service_ids": [
+    "svc-admin-portal",
+    "svc-analytics",
+    "svc-checkout-api",
+    "svc-loyalty",
+    "svc-orders",
+    "svc-recommendations",
+    "svc-reporting",
+    "svc-reviews",
+    "svc-search",
+    "svc-status-page"
+  ],
+  "depth": 3,
+  "max_depth_reached": 3,
+  "paths": [
+    [
+      "svc-payments",
+      "svc-checkout-api",
+      "svc-admin-portal"
+    ],
+    [
+      "svc-payments",
+      "svc-checkout-api",
+      "svc-recommendations",
+      "svc-analytics"
+    ],
+    [
+      "svc-payments",
+      "svc-checkout-api"
+    ],
+    [
+      "svc-payments",
+      "svc-checkout-api",
+      "svc-loyalty"
+    ],
+    [
+      "svc-payments",
+      "svc-orders"
+    ],
+    [
+      "svc-payments",
+      "svc-checkout-api",
+      "svc-recommendations"
+    ],
+    [
+      "svc-payments",
+      "svc-checkout-api",
+      "svc-reporting"
+    ],
+    [
+      "svc-payments",
+      "svc-checkout-api",
+      "svc-reviews"
+    ],
+    [
+      "svc-payments",
+      "svc-checkout-api",
+      "svc-search"
+    ],
+    [
+      "svc-payments",
+      "svc-checkout-api",
+      "svc-status-page"
+    ]
+  ],
+  "service_id": "svc-payments",
+  "tier1_affected": [
+    "svc-checkout-api"
+  ]
+}

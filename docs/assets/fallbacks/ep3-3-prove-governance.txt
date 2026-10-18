@@ -1,0 +1,61 @@
+Recorded 2026-10-11 against the deployed ATLAS (eastus2, show profile). Fallback for runbook/EPISODE-3.md.
+
+$ make prove-governance
+==============================================================================
+                           ATLAS gateway governance                           
+==============================================================================
+gateway   https://apim-atlas-mkruniv7.azure-api.net
+caller    you (no Atlas.Agent role)  and  the web app's identity (Atlas.Agent)
+
+[1] The Function App cannot be called except through the gateway
+      no token                         HTTP 401
+      valid Entra token, not the gateway HTTP 403
+      -> only APIM's managed identity is an allowed caller              PASS
+
+[2] Through APIM without a subscription key is refused
+      GET /ops/services/svc-checkout-api, token but no key   HTTP 401
+      -> no subscription, no entry                                      PASS
+
+[3] A key and a valid token are not enough: the caller must be an agent
+      operator token (no Atlas.Agent role) + key         HTTP 403
+      forbidden: This identity is not an ATLAS agent. The Atlas.Agent role is req
+      -> 403, not 401: the gateway knows who you are, and says no       PASS
+
+[4] An agent's call succeeds, with the correlation id echoed
+      web app identity (Atlas.Agent) + agent key         HTTP 200  (Checkout API)
+      x-atlas-correlation-id: 0b05044eabec260591fbad6794a26f2f
+      -> 188 ms end to end                                              PASS
+
+[5] Over 120 calls a minute: throttled with 429 and Retry-After
+      140 requests in 5.1 s   403: 130  429: 10
+      (403s are expected: the limiter runs BEFORE authentication, so even a
+       flood of rejected callers is counted and cut off)
+      first 429 at call 123 of this burst, Retry-After: 1 s
+      -> cheapest check first; it protects everything behind it         PASS
+
+[6] A malformed body is refused by the gateway; the backend never runs
+      POST /ops/tickets {"case_id": 42, "severity": "Sev9", "surprise": true}
+      HTTP 400  invalid_request: The request does not match the API contract.
+      -> contract enforced at the gateway, from the spec                PASS
+
+[7] The model token budget is enforced: 429 and zero tokens remaining
+      call 1: HTTP 200   x-atlas-remaining-tokens: 19583
+      call 2: HTTP 200   x-atlas-remaining-tokens: 19481
+      call 3: HTTP 429   x-atlas-remaining-tokens: 0
+      -> read-only product: 600 tokens a minute, per subscription       PASS
+
+[8] A failing backend is retried 3 times, then a typed envelope
+      chaos flag ON  (the ops API answers 503 - a data write, not a stopped app)
+      chaos flag OFF
+      HTTP 503   attempts: 4   took 10679 ms (backoff 1-8 s)
+      {code: unavailable, message: the operations API is temporarily unavai, correlation_id: 7a523658d4ef...}
+      -> 1 try + 3 retries; no stack trace, ever                        PASS
+
+[6] Function logs: the valid call arrived, the malformed one never did
+      valid call     0b05044eabec260591fbad6794a26f2f  Function executions: 1
+      malformed call 66b9c80ae7f05d93b7a67220ff164070  Function executions: 0
+      -> absence is only evidence once the control arrived              PASS
+
+==============================================================================
+                         9/9 governance proofs passed                         
+==============================================================================

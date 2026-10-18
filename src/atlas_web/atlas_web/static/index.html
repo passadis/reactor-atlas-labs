@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ATLAS - Contoso incident copilot</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="logo">ATLAS</span><span class="sub">Contoso Cloud Operations</span></div>
+
+    <div class="controls">
+      <div class="seg" id="modes" role="radiogroup" aria-label="Hosting shape" data-scope="ep1">
+        <button data-mode="model" role="radio">Model call</button>
+        <button data-mode="prompt" role="radio">Prompt agent</button>
+        <button data-mode="hosted" role="radio">Hosted agent</button>
+        <button data-mode="app" role="radio" class="on">This app</button>
+      </div>
+
+      <label class="ctl" data-scope="ep1" title="Instruction version, read from Cosmos per request">
+        Instructions
+        <select id="instructions"><option value="">active</option></select>
+      </label>
+
+      <label class="ctl toggle" data-scope="ep1"><input type="checkbox" id="contract"> Show the contract</label>
+
+      <label class="ctl" title="What this screen reveals. Never changes what the system does.">
+        Scope
+        <select id="scope">
+          <option value="ep1">Episode 1</option>
+          <option value="ep2">Episode 2</option>
+          <option value="ep3">Episode 3</option>
+          <option value="ep4">Episode 4</option>
+          <option value="full">Full (encore)</option>
+        </select>
+      </label>
+
+      <div class="persona" id="persona" title="Signed-in identity and the persona whose entitlements apply">
+        <span id="persona-name">...</span>
+        <label class="actas" title="Narrowing only lowers privilege">act as
+          <select id="actas">
+            <option value="">myself</option>
+            <option value="manager">manager</option>
+            <option value="readonly">readonly</option>
+          </select></label>
+      </div>
+      <a class="nav" href="/approvals" data-scope="ep2">Approvals</a>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <main class="grid">
+    <section class="chat" aria-label="Conversation">
+      <div id="log" class="log">
+        <div class="hint">
+          <p>Describe an incident. Try:</p>
+          <button class="example">Checkout is timing out for about 20% of EU customers since 14:05, started right after the payments deploy.</button>
+          <button class="example">Is the service that caused this under a change freeze, and which team owns it?</button>
+          <p class="muted">Other incidents happening now (data/generators/scenarios.py):</p>
+          <button class="example" data-scenario="reporting-ttl">The internal reporting dashboards started returning 5xx errors at 13:50, a few minutes after a reporting cache change. It is the staging reporting service, no customer impact.</button>
+          <button class="example" data-scenario="search-flag">Search is returning errors and wrong results for about a third of users since 13:40, right after a feature-flag rollout. What is going on and what do we do?</button>
+          <button class="example" data-scenario="orders-stale">Order placement p95 latency has roughly tripled since 14:10. A change to the orders service went out at 14:02. Which runbook applies and what is the plan?</button>
+        </div>
+      </div>
+      <form id="composer" class="composer" autocomplete="off">
+        <textarea id="message" rows="2" placeholder="Describe the incident, or ask a follow-up..." required></textarea>
+        <div class="composer-actions">
+          <button type="button" id="stop" class="ghost" hidden>Stop</button>
+          <button type="button" id="new-session" class="ghost">New session</button>
+          <button type="submit" id="send">Send</button>
+        </div>
+      </form>
+    </section>
+
+    <aside class="activity" aria-label="Agent activity">
+      <h2>Agent activity</h2>
+      <dl class="meta" id="meta">
+        <dt>Shape</dt><dd id="m-mode">-</dd>
+        <dt>Instructions</dt><dd id="m-instr">-</dd>
+        <dt>Session</dt><dd id="m-session">-</dd>
+        <dt>Trace</dt><dd id="m-trace">-</dd>
+        <dt>First event</dt><dd id="m-first">-</dd>
+        <dt>Elapsed</dt><dd id="m-elapsed">-</dd>
+        <dt>Tokens in</dt><dd id="m-tokens">-</dd>
+      </dl>
+      <ol id="tools" class="tools"></ol>
+
+      <section class="panel" data-scope="ep2" aria-label="Workflow">
+        <h3>Workflow graph</h3>
+        <div class="wf-controls">
+          <label class="ctl" title="Orchestration shape. Changes the graph, not the capability.">
+            Shape
+            <select id="orch-mode">
+              <option value="graph">Concurrent graph</option>
+              <option value="sequential_only">Sequential only</option>
+              <option value="handoff">Handoff</option>
+            </select>
+          </label>
+          <button type="button" id="run-workflow" class="ghost">Run in workflow</button>
+        </div>
+        <ol id="wf-nodes" class="wf-nodes"></ol>
+        <dl class="meta" id="wf-meta">
+          <dt>Case</dt><dd id="wf-case">-</dd>
+          <dt>Severity</dt><dd id="wf-sev">-</dd>
+          <dt>Plan</dt><dd id="wf-plan">-</dd>
+          <dt>Elapsed</dt><dd id="wf-elapsed">-</dd>
+        </dl>
+        <div id="wf-approval" class="wf-approval" hidden>
+          <h4>Approval required <span class="muted" id="wf-approval-roles"></span></h4>
+          <ul id="wf-approval-reasons" class="wf-reasons"></ul>
+          <div class="wf-plan" id="wf-approval-plan"></div>
+          <label class="ctl">Comment
+            <input type="text" id="wf-comment" maxlength="200"
+                   placeholder="Why you are approving or rejecting (required)">
+          </label>
+          <div class="wf-approval-actions">
+            <button type="button" id="wf-approve">Approve</button>
+            <button type="button" id="wf-reject" class="ghost">Reject</button>
+          </div>
+          <p class="muted" id="wf-approval-note"></p>
+        </div>
+
+        <h4>Decision log <span class="muted">(deterministic code only)</span></h4>
+        <ol id="wf-decisions" class="wf-decisions"></ol>
+        <details class="wf-mermaid">
+          <summary>Mermaid source</summary>
+          <pre id="wf-mermaid-src">-</pre>
+        </details>
+      </section>
+      <section class="panel" data-scope="ep3" aria-label="Gateway and remediation">
+        <h3>Gateway and remediation</h3>
+        <p class="muted" id="rm-empty">After approval: the ticket, then every remediation step as the worker runs it.</p>
+        <dl class="meta" id="rm-meta" hidden>
+          <dt>Ticket</dt><dd id="rm-ticket">-</dd>
+          <dt>Operation</dt><dd id="rm-op">-</dd>
+          <dt>Status</dt><dd id="rm-status">-</dd>
+          <dt>Path</dt><dd class="muted">orchestrator &rarr; APIM &rarr; Function &rarr; Service Bus &rarr; worker</dd>
+        </dl>
+        <ol id="rm-steps" class="wf-decisions"></ol>
+      </section>
+      <section class="panel" data-scope="ep4" aria-label="Quality">
+        <h3>Evaluation</h3>
+        <p class="muted">Scorecards and the quality gate appear here (Phase 12/13).</p>
+      </section>
+    </aside>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

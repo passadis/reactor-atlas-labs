@@ -1,0 +1,8 @@
+// Alert: tool error rate above 10 % (window 5 min, set on the rule), with at least 5 tool calls so
+// one timeout in a quiet minute does not page anyone.
+let calls = toscalar(dependencies | where name startswith "execute_tool " | count);
+traces
+| where customDimensions["atlas.event"] == "tool.failure"
+| summarize failures = count()
+| extend calls, error_rate_pct = iff(calls == 0, 0.0, 100.0 * failures / calls)
+| where calls >= 5 and error_rate_pct > 10

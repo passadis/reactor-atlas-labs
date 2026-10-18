@@ -1,0 +1,260 @@
+Recorded 2026-10-06 against the deployed ATLAS (eastus2). Fallback for runbook/EPISODE-1.md.
+
+--- Model call ---
+first event 1.44 s, total 12.3 s
+
+Here’s a concise incident response you can use.
+
+## Initial assessment
+This is likely a **high-severity production incident**:
+- Customer-facing
+- Revenue-impacting
+- Regional impact: **EU**
+- Temporal correlation: **started immediately after payments deploy**
+- Partial failure rate: **~20% checkout timeout**
+
+## Likely hypothesis
+Most likely:
+- Regression introduced by the **payments deploy**
+- Possibly affecting:
+  - EU-specific routing/config
+  - downstream payment provider calls
+  - DB/query latency
+  - connection pool/thread exhaustion
+  - retry storm / timeout misconfiguration
+
+## Immediate actions
+### 1) Mitigate first
+If not already done:
+- **Pause/stop the current payments rollout**
+- **Rollback the payments deploy** to last known good version
+- If rollback is risky/slow, **disable new traffic to the new version** or reduce canary weight to 0
+- If there is an EU-specific feature/config flag in payments, **turn it off**
+
+### 2) Declare/coordinate
+- Open/upgrade incident bridge
+- Assign:
+  - Incident commander
+  - Ops/communications lead
+  - Payments service owner
+- Notify:
+  - Checkout team
+  - Payments team
+  - EU/on-call SRE
+  - Customer support/status page owner
+
+### 3) Validate impact
+Check:
+- Timeout/error rate by:
+  - region = EU
+  - payment method
+  - provider
+  - app version / service version
+- Compare:
+  - old payments version vs new version
+  - EU vs non-EU
+- Confirm exact deploy time and whether errors align minute-by-minute
+
+## Fast triage checklist
+Ask/run these now:
+
+### Service health
+- Payments service:
+  - latency p95/p99
+  - error rate
+  - saturation
+  - pod/container restarts
+  - CPU/memory
+  - thread/worker exhaustion
+- Checkout service:
+  - upstream timeout count to payments
+  - queue depth
+  - dependency map
+
+### Dependency checks
+- Payment gateway/provider latency/errors in EU
+- Database:
+  - slow queries
+  - connection pool exhaustion
+  - locks
+- Cache/network:
+  - timeouts
+  - DNS/TLS/connectivity issues
+- Service mesh / ingress:
+  - 5xx
+  - upstream reset / deadline exceeded
+
+### Deployment checks
+- What changed in the payments deploy?
+  - code
+  - config
+  - feature flags
+  - timeout values
+  - retry policy
+  - endpoint/routing
+  - region-specific settings
+- Was schema/config rolled out with it?
+- Any canary analysis or alarms ignored?
+
+## Most useful immediate queries
+Look for:
+- `timeout`, `deadline exceeded`, `upstream request timeout`
+- `connection pool exhausted`
+- `retrying`, `circuit breaker open`
+- provider-specific failures
+- logs filtered to:
+  - `region=eu`
+  - `service=payments`
+  - `version=new`
+  - timeframe `14:00-now`
+
+## Decision guidance
+- If rollback is available and low risk: **rollback now**
+- If rollback already done and issue persists:
+  - inspect config changes and dependency health
+  - check whether deploy changed traffic shape causing downstream saturation
+- If only one provider/payment method affected:
+  - route around affected provider
+  - disable affected payment method in EU if needed
+
+## Suggested incident update
+> Investigating elevated checkout timeouts impacting approximately 20% of EU customers since 14:05 UTC. Issue began immediately after a payments deployment. We are mitigating by halting rollout and preparing rollback while we validate impact and isolate whether the new payments version or an EU-specific dependency is causing increased timeout rates.
+
+## What I’d recommend right now
+1. **Rollback payments deploy immediately**
+2. **Compare timeout/error rates by payments version in EU**
+3. **Check payment provider and DB latency**
+4. **Prepare customer comms/status update**
+
+If you want, I can also draft:
+- a **Slack incident message**
+- a **status page update**
+- a **step-by-step runbook**
+- or a **war-room command checklist**.
+
+--- Prompt agent ---
+first event 1.87 s, total 25.0 s
+
+Activity panel:
+  mcp_list_tools 23148ms ok
+  atlas_tools___search_ops_knowledge 5036ms ok
+
+The best match is **RB-0042 — “Mitigating elevated p95 latency on Checkout API”**. It specifically covers elevated p95 latency on `svc-checkout-api` and includes checking the last change to the service, so it fits the “after a deployment” scenario well. Citation: **RB-0042**.
+
+A secondary related runbook is **RB-0060 — “Mitigating elevated p95 latency on Payments”** because RB-0042 is scoped to both `svc-checkout-api` and `svc-payments`, so dependency health may matter if Payments is implicated. Citation: **RB-0060**.
+
+--- Hosted agent ---
+first event 2.61 s, total 17.5 s
+
+Activity panel:
+  lookup_service 560ms ok
+  lookup_service 302ms ok
+  get_recent_changes 542ms ok
+  get_recent_changes 515ms ok
+  get_telemetry 513ms ok
+  get_telemetry 495ms ok
+  search_knowledge 493ms ok
+  search_knowledge 493ms ok
+  compute_blast_radius 283ms ok
+
+Structured output (the contract):
+{
+  "severity": "Sev2",
+  "category": "deployment",
+  "affected_services": [
+    "svc-checkout-api",
+    "svc-payments"
+  ],
+  "likely_cause": "Most likely a regression from payments deployment CHG-2026-0873 on svc-payments. The deploy completed at 13:59 UTC, and both svc-payments and svc-checkout-api show anomalies beginning at 14:05 UTC; checkout had no recent deploys of its own, while payments shows elevated p95 latency (900 ms vs 250 ms SLO) and 6.23% errors that align with checkout timeouts.",
+  "confidence": 0.93,
+  "suspected_change_ids": [
+    "CHG-2026-0873"
+  ],
+  "summary": "Checkout is degraded for customers, not fully unavailable: svc-checkout-api telemetry shows anomalies starting at 14:05 UTC with p95 latency 865 ms and 5.629% errors, matching the reported timeouts. The strongest cause signal is high-risk payments change CHG-2026-0873 at 13:59 UTC; blast radius from svc-payments includes 10 downstream services, including Tier 1 svc-checkout-api, so this needs human coordination now.",
+  "citations": [
+    {
+      "doc_id": "RB-0042",
+      "title": "RB-0042 Mitigating elevated p95 latency on Checkout API",
+      "last_reviewed": "2026-01-14",
+      "relevance": 0.96
+    },
+    {
+      "doc_id": "RB-0060",
+      "title": "RB-0060 Mitigating elevated p95 latency on Payments",
+      "last_reviewed": "2026-08-12",
+      "relevance": 0.88
+    },
+    {
+      "doc_id": "INC-2026-0320",
+      "title": "INC-2026-0320 Payments deployment degradation",
+      "last_reviewed": "2026-08-05",
+      "relevance": 0.83
+    },
+    {
+      "doc_id": "INC-2026-0445",
+      "title": "INC-2026-0445 Payments deployment degradation",
+      "last_reviewed": "2026-05-06",
+      "relevance": 0.71
+    }
+  ],
+  "needs_human": true,
+  "reasoning_notes": "Sev2 row: Tier 1 svc-checkout-api is degraded but still serving most requests; measured p95 865>250 ms and errors 5.629%, below Sev1 threshold of 50%. Human needed because suspected cause is a change to Tier 1 svc-payments and blast radius includes Tier 1 svc-checkout-api."
+}
+
+--- This app ---
+first event 1.86 s, total 16.9 s
+
+Activity panel:
+  lookup_service 609ms ok
+  lookup_service 47ms ok
+  get_recent_changes 28ms ok
+  get_recent_changes 56ms ok
+  get_telemetry 89ms ok
+  get_telemetry 98ms ok
+  search_knowledge 262ms ok
+  search_knowledge 259ms ok
+  compute_blast_radius 1ms ok
+
+Structured output (the contract):
+{
+  "severity": "Sev2",
+  "category": "latency",
+  "affected_services": [
+    "svc-checkout-api",
+    "svc-payments"
+  ],
+  "likely_cause": "Most likely a regression from payments deployment CHG-2026-0873 on svc-payments. It is a high-risk change deployed at 13:59, and both svc-payments and its dependent svc-checkout-api began showing anomalies at 14:05 with p95 rising far above the 250 ms SLO and error rates increasing, which matches the reported checkout timeouts and the dependency relationship between the services.",
+  "confidence": 0.92,
+  "suspected_change_ids": [
+    "CHG-2026-0873"
+  ],
+  "summary": "Checkout is in Sev2 degradation, not full outage: svc-checkout-api started anomalous behavior at 14:05 with p95 865 ms and errors 5.629%, affecting a Tier 1 customer path. The strongest correlation is the payments deploy CHG-2026-0873 at 13:59; svc-payments showed matching onset and degradation, and its blast radius includes svc-checkout-api.",
+  "citations": [
+    {
+      "doc_id": "RB-0042",
+      "title": "RB-0042 Mitigating elevated p95 latency on Checkout API",
+      "last_reviewed": "2026-01-14",
+      "relevance": 0.93
+    },
+    {
+      "doc_id": "RB-0060",
+      "title": "RB-0060 Mitigating elevated p95 latency on Payments",
+      "last_reviewed": "2026-08-12",
+      "relevance": 0.88
+    },
+    {
+      "doc_id": "INC-2026-0397",
+      "title": "INC-2026-0397 Checkout Api latency degradation",
+      "last_reviewed": "2026-02-04",
+      "relevance": 0.62
+    },
+    {
+      "doc_id": "INC-2026-0370",
+      "title": "INC-2026-0370 Payments latency degradation",
+      "last_reviewed": "2026-02-11",
+      "relevance": 0.58
+    }
+  ],
+  "needs_human": true,
+  "reasoning_notes": "Sev2 row: Tier 1 degraded but serving most requests; checkout p95 865>250 ms, errors 5.629%, onset 14:05. Likely cause is a change to Tier 1 svc-payments, and blast radius includes Tier 1 svc-checkout-api, so human escalation required."
+}

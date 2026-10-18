@@ -3,9 +3,17 @@
 # Targets are filled in as phases land. A target that is not implemented yet exits non-zero
 # with the phase that owns it, so nothing silently "passes" before it exists.
 #
-# On Windows, run these from Git Bash. SHELL is forced to bash so recipes are POSIX.
+# SHELL is forced to bash so recipes are POSIX. On Windows it is Git Bash by absolute path (8.3
+# form: make cannot take a space): from PowerShell a bare `bash` either is not found - make then
+# falls back to cmd.exe - or resolves to WSL's bash in System32, which has no uv (2026-10-06).
 
 SHELL := bash
+ifeq ($(OS),Windows_NT)
+GIT_BASH := $(firstword $(wildcard C:/PROGRA~1/Git/bin/bash.exe C:/PROGRA~2/Git/bin/bash.exe))
+ifneq ($(GIT_BASH),)
+SHELL := $(GIT_BASH)
+endif
+endif
 .SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := help
 
@@ -28,7 +36,7 @@ help: ## Show this help
 # ---------------------------------------------------------------- Phase 00 --
 .PHONY: install
 install: ## Sync the uv workspace (all groups)
-	$(UV) sync --python 3.13 --group dev --group evals
+	$(UV) sync --python 3.13 --group dev --group evals --group ui
 
 .PHONY: lint
 lint: ## ruff check + mypy strict on src/
@@ -59,37 +67,297 @@ probe: ## Re-verify the agent-stack symbol surface by import
 
 # ---------------------------------------------------------------- Phase 01 --
 .PHONY: provision
-provision: ## azd provision (Phase 01)
-	$(call PENDING,Phase 01 - infrastructure)
+provision: ## azd provision the Azure footprint
+	azd provision --no-prompt
+
+.PHONY: verify-phase01
+verify-phase01: ## Verify the deployed Phase 01 footprint
+	bash scripts/verify_phase01.sh
+
+.PHONY: app-registrations
+app-registrations: ## Create or update the three Entra app registrations
+	bash scripts/create_app_registrations.sh
 
 .PHONY: deploy
-deploy: ## azd deploy all services (Phase 01/04)
-	$(call PENDING,Phase 01 - infrastructure)
+deploy: ## azd deploy the services built so far (web; more join in Phases 06-10)
+	azd deploy web --no-prompt
 
 # ---------------------------------------------------------------- Phase 02 --
 .PHONY: seed
-seed: ## Generate and load the deterministic synthetic dataset (Phase 02)
-	$(call PENDING,Phase 02 - synthetic data)
+seed: ## Generate and load the deterministic synthetic dataset into Cosmos and AI Search
+	$(PY) -m data.generators.generate_all --seed 20260914 --out data/seed
+	$(PY) -m scripts.seed
+
+.PHONY: verify-phase02
+verify-phase02: ## Verify seeded Cosmos + AI Search against the deployed environment
+	bash scripts/verify_phase02.sh
+
+.PHONY: freeze-fixtures
+freeze-fixtures: ## Re-freeze golden fixtures (deliberate act; review the diff)
+	$(PY) -m scripts.freeze_fixtures
+
+# ---------------------------------------------------------------- Phase 03 --
+.PHONY: demo-agent
+demo-agent: ## Episode 1: the incident agent locally, streaming, then a follow-up (session in Cosmos)
+	$(PY) -m scripts.demo_agent_local
+
+.PHONY: demo-raw
+demo-raw: ## Episode 1: the same report to the bare model, no tools, no data
+	$(PY) -m scripts.demo_raw_model
+
+.PHONY: prompt-agent
+prompt-agent: ## Create or update the Foundry prompt agent atlas-triage-prompt (idempotent)
+	$(PY) -m scripts.create_prompt_agent
+
+.PHONY: verify-phase03
+verify-phase03: ## Verify the incident agent, prompt agent, guardrails and tracing against Azure
+	bash scripts/verify_phase03.sh
+
+# ---------------------------------------------------------------- Phase 04 --
+.PHONY: web-local
+web-local: ## Run the web app locally with the auth bypass (refused in Azure)
+	ATLAS_DEMO_AUTH_BYPASS=true $(UV) run uvicorn atlas_web.app:app --port 8000 --reload
+
+.PHONY: sse-probe
+sse-probe: ## Drive the deployed web app over SSE with a real Entra token; print timings
+	$(PY) -m scripts.sse_probe --follow-up "Is the service that caused this under a change freeze, and which team owns it?"
+
+.PHONY: screenshots
+screenshots: ## Capture fallback-deck screenshots of the deployed app into docs/assets
+	$(PY) -m scripts.capture_screenshots
+
+.PHONY: verify-phase04
+verify-phase04: ## Verify the deployed web app: auth, health, SSE, cancellation, tracing
+	bash scripts/verify_phase04.sh
+
+# ---------------------------------------------------------------- Phase 05 --
+.PHONY: hosted-deploy
+hosted-deploy: ## Stage the hosted agent (atlas_agent + adapter) and deploy a new version to Foundry
+	$(PY) -m scripts.package_hosted_agent
+	azd deploy -C agents atlas-incident-agent --no-prompt
+	$(PY) -m scripts.hosted_agent check-guardrail
+
+.PHONY: hosted-status
+hosted-status: ## Hosted agent versions, pinned version, guardrail and identity
+	$(PY) -m scripts.hosted_agent status
+
+.PHONY: hosted-pin
+hosted-pin: ## Pin the hosted agent to VERSION (pointer flip, no deploy): make hosted-pin VERSION=7
+	bash scripts/pin_agent_version.sh $(VERSION)
+
+.PHONY: hosted-rollback
+hosted-rollback: ## Roll the hosted agent back to the previous good version
+	bash scripts/rollback_agent.sh
+
+.PHONY: toolbox
+toolbox: ## Create or update the atlas-tools toolbox and re-attach it to the prompt agent
+	$(PY) -m scripts.upsert_toolbox
+	$(PY) -m scripts.create_prompt_agent
+
+.PHONY: verify-phase05
+verify-phase05: ## Verify hosted agent, guardrail, identity, web equivalence, traces, rollback
+	bash scripts/verify_phase05.sh
+
+# ---------------------------------------------------------------- Phase 06 --
+.PHONY: orchestrator-local
+orchestrator-local: ## Run the orchestrator locally against deployed Azure resources
+	$(PY) -m uvicorn atlas_orchestrator.api:app --reload --host 127.0.0.1 --port 8001
+
+.PHONY: graph
+graph: ## Print the live workflow graph as Mermaid (MODE=graph|sequential_only|handoff)
+	$(PY) -m scripts.print_graph --mode $(or $(MODE),graph)
+
+.PHONY: verify-phase06
+verify-phase06: ## Verify the deployed workflow: typed state, concurrency, all three modes, Mermaid
+	bash scripts/verify_phase06.sh
+
+# ---------------------------------------------------------------- Phase 07 --
+.PHONY: checkpoints
+checkpoints: ## List workflow checkpoints (CASE=CASE-XXXX narrows to one case)
+	$(PY) -m scripts.inspect_checkpoints $(if $(CASE),--case $(CASE),)
+
+.PHONY: resume
+resume: ## Resume a parked case from its checkpoint (CASE=... [APPROVE=1])
+	$(PY) -m scripts.resume_case $(CASE) $(if $(APPROVE),--approve,)
+
+.PHONY: kill-orchestrator
+kill-orchestrator: ## Episode 2 set piece: scale the orchestrator to 0, then back to 2
+	bash scripts/kill_orchestrator.sh
+
+.PHONY: verify-phase07
+verify-phase07: ## Verify checkpoints, the policy gate, approval and kill/resume
+	bash scripts/verify_phase07.sh
+
+.PHONY: screenshots-ep2
+screenshots-ep2: ## Capture the Episode 2 fallback screenshots (graph and approval gate)
+	$(UV) run --group ui python -m scripts.capture_phase06
+	$(UV) run --group ui python -m scripts.capture_phase07
+
+.PHONY: verify-phase07-fast
+verify-phase07-fast: ## Same, skipping the several-minute orchestrator restart
+	ATLAS_SKIP_KILL=1 bash scripts/verify_phase07.sh
 
 # ---------------------------------------------------------------- Phase 12 --
-.PHONY: eval
-eval: ## Run the evaluation suite and write a scorecard (Phase 12)
-	$(call PENDING,Phase 12 - evaluation)
+# INSTRUCTIONS=v0|v1|v2 (default: the active version). RUN names the results folder.
+INSTRUCTIONS ?=
+EVAL_RUN = $(shell date -u +%Y%m%d-%H%M%S)-$(if $(INSTRUCTIONS),$(INSTRUCTIONS),active)
 
+.PHONY: eval
+eval: ## Full evaluation: agent over the 72 cases, local checks, Foundry judges, scorecard (INSTRUCTIONS=v1)
+	uv run python -m evals.harness $(if $(INSTRUCTIONS),--instructions $(INSTRUCTIONS),) --run-id $(EVAL_RUN)
+	uv run python -m evals.run_eval --responses evals/results/$(EVAL_RUN)/responses.jsonl
+
+.PHONY: eval-local
+eval-local: ## Deterministic checks only, over a recorded run: make eval-local RUN=<run_id>
+	uv run python -m evals.local_checks evals/results/$(RUN)/responses.jsonl
+
+.PHONY: eval-target
+eval-target: ## Target mode: Foundry drives the deployed hosted agent (CLAUDE.md 7.6)
+	uv run python -m evals.run_eval --mode target --dataset evals/datasets/atlas-eval-v1.jsonl
+
+.PHONY: eval-dataset
+eval-dataset: ## Rebuild evals/datasets/*.jsonl from the seed (deterministic; review the diff)
+	uv run python -m evals.build_dataset
+
+# PyRIT is not in the project lockfile: the scan runs in an isolated, throwaway environment.
+OBJECTIVES ?= 3
 .PHONY: redteam
-redteam: ## Run the AI Red Teaming scan (Phase 12; eastus2/northcentralus only)
-	$(call PENDING,Phase 12 - evaluation)
+redteam: ## AI Red Teaming scan of the hosted agent, local, isolated env (OBJECTIVES=3 per risk)
+	uv run --isolated --no-project --python 3.13 --with "azure-ai-evaluation[redteam]==1.18.5" 	  --with "azure-ai-projects==2.6.1" --with "azure-identity" 	  python evals/run_redteam.py --objectives $(OBJECTIVES)
+
+.PHONY: scale
+scale: ## Set Container Apps replica ranges: make scale PROFILE=idle|work|show (control plane: never live)
+	@test -n "$(PROFILE)" || { echo "usage: make scale PROFILE=idle|work|show"; exit 2; }
+	azd env set ATLAS_SCALE_PROFILE $(PROFILE)
+	azd provision --no-prompt
+
+.PHONY: gate
+gate: ## Evaluate-only quality gate on a deployed hosted-agent version: make gate VERSION=good|bad|<n>
+	uv run python -m evals.gate --version $(if $(VERSION),$(VERSION),good)
+
+.PHONY: inject
+inject: ## Regression kit: make inject NAME=weak_instructions ACTION=apply|revert|status
+	uv run python -m scripts.inject_$(NAME) --$(if $(ACTION),$(ACTION),status)
+
+.PHONY: restore-baseline
+restore-baseline: ## Revert every injection, pin the good agent version, run the smoke check
+	uv run python -m scripts.restore_baseline
+
+.PHONY: smoke
+smoke: ## Is ATLAS at its baseline and serving? (SMOKE_FULL=1 adds the canonical case)
+	ATLAS_SMOKE_FULL=$(SMOKE_FULL) bash scripts/verify_smoke.sh
+
+.PHONY: github-oidc
+github-oidc: ## Create/refresh the GitHub Actions OIDC identity and repo variables (no secrets)
+	bash scripts/github_oidc.sh
+
+.PHONY: probe-scenarios
+probe-scenarios: ## Run the canonical incident and every staged scenario to the gate (SCENARIO=key for one)
+	uv run python -m scripts.probe_scenarios $(SCENARIO)
 
 # ---------------------------------------------------------------- Phase 11 --
 .PHONY: trace-check
-trace-check: ## Assert one trace spans all six hops for CASE=<case_id> (Phase 11)
-	$(call PENDING,Phase 11 - observability)
+trace-check: ## Print one case's waterfall and assert it spans every hop: make trace-check CASE=<case_id>
+	@test -n "$(CASE)" || { echo "usage: make trace-check CASE=<case_id>"; exit 2; }
+	uv run python -m scripts.trace_check $(CASE) $(if $(FULL),--full,)
 
 # ---------------------------------------------------------------- Phase 14 --
+.PHONY: mcp-probe
+mcp-probe: ## List the deployed MCP server's tools, as an MCP client sees them
+	uv run python -m scripts.mcp_probe
+
+.PHONY: compare-backends
+compare-backends: ## Run the canonical case with the tools on Cosmos, then on the ops API
+	uv run python -m scripts.compare_tool_backends
+
+.PHONY: verify-phase08
+verify-phase08: ## Verify the ops API and MCP server: spec, auth, idempotency, tokens, the switch
+	bash scripts/verify_phase08.sh
+
+.PHONY: prove-governance
+prove-governance: ## The eight gateway governance proofs, projector-readable (Episode 3)
+	uv run python -m scripts.prove_governance
+
+.PHONY: tool-description-change
+tool-description-change: ## Change one APIM tool description, watch four surfaces, restore
+	uv run python -m scripts.tool_description_change
+
+.PHONY: chaos-ops-api-on
+chaos-ops-api-on: ## Ops API returns 503 for 120 s (data flag, never a stopped app)
+	bash scripts/chaos/ops_api_down.sh on 120
+
+.PHONY: chaos-ops-api-off
+chaos-ops-api-off: ## Clear the ops API chaos flag
+	bash scripts/chaos/ops_api_down.sh off
+
+.PHONY: verify-phase09
+verify-phase09: ## Verify the AI gateway: APIs, governance, only-via-APIM, metrics, four surfaces
+	bash scripts/verify_phase09.sh
+
+.PHONY: logicapps-deploy
+logicapps-deploy: ## Deploy the Logic Apps workflows (approve-remediation, enrich-incident)
+	bash scripts/deploy_logicapps.sh
+
+.PHONY: dlq-inspect
+dlq-inspect: ## List dead-lettered remediation commands with reason and case
+	$(PY) -m scripts.dlq_inspect
+
+.PHONY: dlq-replay
+dlq-replay: ## Replay one after the fix: make dlq-replay OP=OP-XXXX
+	$(PY) -m scripts.dlq_replay --command-id $(OP) --fix
+
+.PHONY: e2e-remediation
+e2e-remediation: ## The whole loop through the console: incident, approval, Service Bus, worker
+	$(PY) -m scripts.e2e_remediation
+
+.PHONY: inject-failing-plan
+inject-failing-plan: ## Stage the RB-0099 plan that retries and dead-letters (the DLQ beat)
+	$(PY) -m scripts.inject_failing_plan
+
+.PHONY: verify-phase10
+verify-phase10: ## Verify approvals, async remediation, DLQ/replay, timeout and the one trace
+	bash scripts/verify_phase10.sh
+
+.PHONY: verify-phase13
+verify-phase13: ## Verify CI, the gate (bad fails, good passes), rollback, eval-required rule, nightly
+	bash scripts/verify_phase13.sh
+
+.PHONY: verify-phase12
+verify-phase12: ## Verify scorecards, thresholds, local checks, red team ASR, comparison, workbook
+	bash scripts/verify_phase12.sh
+
+.PHONY: verify-phase11
+verify-phase11: ## Verify the one trace, workbook sections, alerts firing, content capture, availability
+	bash scripts/verify_phase11.sh
+
 .PHONY: verify-all
-verify-all: ## Run every scripts/verify_phase*.sh plus smoke and security (Phase 14)
-	$(call PENDING,Phase 14 - hardening and verification)
+verify-all: ## Every scripts/verify_phase*.sh, then smoke, security and all five demo paths (Phase 14)
+	@set -e; for s in scripts/verify_phase*.sh; do 	  echo "=== $$s ==="; bash "$$s"; 	done
+	@echo "=== smoke ===" && bash scripts/verify_smoke.sh
+	@echo "=== security ===" && bash scripts/verify_security.sh
+	@echo "=== demo paths ===" && bash scripts/verify_demo_paths.sh
+	@echo "All verifications passed."
+
+.PHONY: e2e-batch
+e2e-batch: ## Every outcome end to end: approved, rejected, auto, dead letter, rollback (ONLY=...)
+	$(PY) -m scripts.e2e_batch $(if $(ONLY),--only $(ONLY),)
+
+.PHONY: trace-story
+trace-story: ## One case's trace told as a story, one line per step (CASE=CASE-XXXX)
+	$(PY) -m scripts.trace_story $(CASE)
+
+.PHONY: warm
+warm: ## T-10 routine: warm every surface the episode touches (read-only, about 35 s)
+	bash scripts/warm.sh
+
+.PHONY: verify-security
+verify-security: ## Phase 14 security pass: 9 checks, zero findings (gitleaks via go run)
+	bash scripts/verify_security.sh
+
+.PHONY: verify-demo-paths
+verify-demo-paths: ## Every on-stage path from a cold demo-reset: make verify-demo-paths PATHS="ep1 encore"
+	bash scripts/verify_demo_paths.sh $(if $(PATHS),--path $(PATHS),)
 
 .PHONY: demo-reset
-demo-reset: ## Return runtime state to the known-good baseline in under 60s (Phase 14)
-	$(call PENDING,Phase 14 - hardening and verification)
+demo-reset: ## Return runtime state to the known-good baseline in under 60s (T-10 routine only)
+	$(PY) -m scripts.demo_reset

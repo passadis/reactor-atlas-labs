@@ -1,0 +1,11 @@
+// Section 6 - Quality: the latest evaluation scorecards. Phase 12's run_eval.py logs one
+// atlas.event eval.run per run with the composite score and its baseline.
+traces
+| where customDimensions["atlas.event"] == "eval.run"
+| extend composite = todouble(customDimensions["atlas.composite"]),
+         baseline = todouble(customDimensions["atlas.baseline"])
+| project timestamp, run_id = tostring(customDimensions["atlas.run_id"]),
+          evaluated = tostring(customDimensions["atlas.evaluated_version"]), composite, baseline,
+          delta_pct = round(100.0 * (composite - baseline) / baseline, 1)
+| order by timestamp desc
+| take 20

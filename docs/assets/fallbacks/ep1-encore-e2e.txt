@@ -1,0 +1,11 @@
+Recorded 2026-10-06 against the deployed ATLAS (eastus2). Fallback for runbook/EPISODE-1.md.
+
+$ make e2e-remediation
+case CASE-1FFAEB7C  persona director  needs []
+  approval        HTTP 200 
+  ticket          TKT-FEE58F1E11
+  operation       OP-C624F128B578  succeeded (8/8 steps)
+  case status     completed
+  trace id        ce913ba76c38e54ccdd0ef7124048acc
+  timing (s)      analysis_to_gate=88.4  approval_accepted=0.5  after_approval_dispatched=2.5  after_approval_first_step=7.1  after_approval_finished=29.9  total=118.8
+CLOSED THE LOOP

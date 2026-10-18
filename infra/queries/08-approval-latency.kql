@@ -1,0 +1,6 @@
+// Section 4 - How long a human took to answer an approval.
+traces
+| where customDimensions["atlas.event"] == "approval.answered"
+| extend latency_s = todouble(customDimensions["atlas.latency_s"])
+| summarize answered = count(), p50_s = round(percentile(latency_s, 50), 1),
+            p95_s = round(percentile(latency_s, 95), 1)

@@ -1,0 +1,21 @@
+<!--
+  atlas-correlation: one correlation id per request, on every hop (CLAUDE.md section 1).
+
+  The id is the W3C trace id when a traceparent arrives, so the gateway, the ops API and the
+  agent's own trace all name the same request with the same value. A caller with no traceparent
+  can still send x-atlas-correlation-id; with neither, the gateway mints one. The id is echoed on
+  the response by the global outbound policy.
+-->
+<fragment>
+  <set-variable name="correlation-id" value="@{
+      var tp = context.Request.Headers.GetValueOrDefault("traceparent", "");
+      var parts = tp.Split('-');
+      if (parts.Length == 4 && parts[1].Length == 32) { return parts[1]; }
+      var given = context.Request.Headers.GetValueOrDefault("x-atlas-correlation-id", "");
+      if (!string.IsNullOrEmpty(given) && given.Length <= 64) { return given; }
+      return context.RequestId.ToString("N");
+  }" />
+  <set-header name="x-atlas-correlation-id" exists-action="override">
+    <value>@((string)context.Variables["correlation-id"])</value>
+  </set-header>
+</fragment>

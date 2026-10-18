@@ -1,0 +1,3 @@
+# Built-in Azure role definition ids (public, documented), not keys. scripts/verify_security.py
+a300ca55eae53069821ad6adc208e14ec7c6f550:infra/modules/rbac.bicep:generic-api-key:94
+a300ca55eae53069821ad6adc208e14ec7c6f550:infra/modules/rbac.bicep:generic-api-key:95

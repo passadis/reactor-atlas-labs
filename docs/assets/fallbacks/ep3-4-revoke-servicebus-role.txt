@@ -1,0 +1,21 @@
+Recorded 2026-10-11 against the deployed ATLAS (eastus2). Fallback for runbook/EPISODE-3.md Beat 4.
+Never live (CLAUDE.md 9.4): a revoked role reaches a running workload only when its cached token is renewed.
+
+$ uv run python -m scripts.drill_servicebus_role
+20:24:59Z  t+     9s  removed 'Azure Service Bus Data Sender' from the ops API identity on remediation-commands at 20:24:59Z
+20:25:05Z  t+    14s  REVOKED: the ops API may not send to remediation-commands
+20:25:14Z  t+    24s  probe: enqueue works - OP-B5A41888215F
+20:26:27Z  t+    96s  probe: enqueue works - OP-47E8A37126B1
+20:27:39Z  t+   168s  probe: enqueue works - OP-6588018C843D
+20:29:01Z  t+   250s  probe: enqueue REFUSED - submission refused: HTTP 503 {'code': 'queue_unavailable', 'message': 'the remediation queue refused the comma
+20:29:01Z  t+   250s  the revoked role took effect after 236 s
+20:29:47Z  t+   296s  canonical case CASE-D7E1215E parked for ['director']
+20:29:48Z  t+   297s  approved: HTTP 200
+20:29:58Z  t+   307s  FAIL CLOSED: case status approved, remediation None - None; operation id None
+20:30:09Z  t+   318s  'Azure Service Bus Data Sender' present on remediation-commands for the ops API identity (20:30:09Z)
+20:30:33Z  t+   342s  probe: enqueue REFUSED - submission refused: HTTP 503 {'code': 'queue_unavailable', 'message': 'the remediation queue refused the comma
+20:31:45Z  t+   414s  probe: enqueue works - OP-4298AFE5AE81
+20:31:45Z  t+   414s  the restored role took effect after 96 s
+20:31:45Z  t+   414s  retry dispatch: HTTP 200 {'status': 'succeeded', 'operation_id': 'OP-5E285F1FA03E', 'plan_id': 'ab686e362690b9f4', 'steps_total': 6, 'steps': [{'
+20:31:46Z  t+   415s  RECOVERED: case completed, remediation succeeded, ticket TKT-CD641DF982
+20:31:52Z  t+   422s  'Azure Service Bus Data Sender' present on remediation-commands for the ops API identity (20:31:52Z)

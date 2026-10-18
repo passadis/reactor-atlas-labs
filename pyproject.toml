@@ -42,6 +42,11 @@ dev = [
     "faker==40.39.0",
     "pyyaml==6.0.3",
 ]
+# Phase 04 fallback-deck screenshots. Drives the locally installed Edge (channel="msedge"), so no
+# browser download. Not needed by CI or any service image.
+ui = [
+    "playwright==1.63.0",
+]
 # Phase 12. azure-ai-evaluation carries the AI Red Teaming Agent (eastus2 / northcentralus only).
 evals = [
     "azure-ai-projects==2.6.1",
@@ -61,6 +66,10 @@ select = ["E", "F", "I", "N", "UP", "B", "ASYNC", "S", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"]
+# The generators MUST use seeded pseudo-randomness: byte-identical output across runs is the
+# requirement (DATA-MODEL.md), and a cryptographic RNG would defeat it. S311 is exactly backwards
+# here, so it is disabled for this tree only rather than noqa-ed line by line.
+"data/generators/**" = ["S311"]
 "**/tests/**" = ["S101"]
 "scripts/**" = ["S603", "S607"]
 
@@ -98,7 +107,11 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
-addopts = "-q --strict-markers --strict-config"
+# --basetemp keeps tmp_path inside the repo instead of the system temp root.
+# On this machine the shared root (%LOCALAPPDATA%\Temp\pytest-of-<user>) is ACL-locked and
+# unreadable even by its owner, which fails every tmp_path test with WinError 5. A project-local
+# temp dir also makes CI and a second machine behave identically. See docs/API-NOTES.md.
+addopts = "-q --strict-markers --strict-config --basetemp=.pytest-tmp"
 asyncio_mode = "auto"
 markers = [
     "integration: requires deployed Azure resources",

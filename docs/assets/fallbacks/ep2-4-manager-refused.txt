@@ -1,0 +1,8 @@
+Recorded 2026-10-07 against the deployed ATLAS (eastus2, show profile). Fallback for runbook/EPISODE-2.md.
+
+Act as: manager, then Approve on the canonical case (CASE-28DB831E):
+
+  HTTP 403: this plan needs director; you are acting as manager
+  case status: awaiting_approval   (still parked, still askable)
+
+The refusal is audited; a wrong answer cannot advance a plan.

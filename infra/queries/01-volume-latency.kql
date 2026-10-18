@@ -1,0 +1,9 @@
+// Section 1 - Volume and latency: analysis runs per 15 minutes, with percentiles.
+// workflow.run is the agents' share of a case (intake to plan); the human approval wait is excluded.
+dependencies
+| where name == "workflow.run"
+| summarize runs = count(), p50_s = round(percentile(duration, 50) / 1000, 1),
+            p95_s = round(percentile(duration, 95) / 1000, 1),
+            p99_s = round(percentile(duration, 99) / 1000, 1)
+    by bin(timestamp, 15m)
+| order by timestamp asc

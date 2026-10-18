@@ -1,0 +1,9 @@
+# What the agent is told, what its tools promise, and how it is judged need a named reviewer
+# (docs/AGENT-GOVERNANCE.md). CI separately fails a PR that changes them without a new evaluation.
+/src/atlas_agent/atlas_agent/instructions/        @passadis
+/src/atlas_orchestrator/atlas_orchestrator/instructions/ @passadis
+/src/atlas_orchestrator/atlas_orchestrator/policy.py @passadis
+/apim/mcp/                                        @passadis
+/apim/openapi/                                    @passadis
+/evals/thresholds.yaml                            @passadis
+/evals/reviewed_exceptions.yaml                   @passadis

@@ -1,0 +1,11 @@
+// Section 3 - Model usage: tokens per agent, from the GenAI chat spans Agent Framework emits, with a
+// relative cost proxy (output tokens weighted 4x input). A ranking, not a bill.
+dependencies
+| where name startswith "chat "
+| extend input = toint(customDimensions["gen_ai.usage.input_tokens"]),
+         output = toint(customDimensions["gen_ai.usage.output_tokens"]),
+         agent = tostring(customDimensions["microsoft.gen_ai.main_agent.name"])
+| summarize calls = count(), input_tokens = sum(input), output_tokens = sum(output),
+            cost_units = sum(input + 4 * output), p95_s = round(percentile(duration, 95) / 1000, 1)
+    by agent
+| order by cost_units desc

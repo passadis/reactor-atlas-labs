@@ -1,0 +1,221 @@
+Recorded 2026-10-14 against the deployed ATLAS (eastus2, show profile). Fallback for runbook/EPISODE-4.md.
+
+$ make trace-check CASE=CASE-06EB9419
+case CASE-06EB9419  operation_Id d58e6c3e563c8a8954ca7c6495f9c1b7  306 spans (102 infrastructure spans hidden; --full shows them)
+
+    start  duration  component               span
+    0.00s     0.04s  atlas-web               POST /cases
+    0.23s    64.42s  atlas-orchestrator        atlas.case
+    0.24s     0.00s  atlas-orchestrator          workflow.build
+    0.24s    59.40s  atlas-orchestrator          workflow.run
+    0.29s     0.12s  atlas-orchestrator            executor.process intake
+    0.29s     0.12s  atlas-orchestrator              GET /ops/services
+    0.33s     0.06s  apim-atlas-mkruniv7               GET /ops/services
+    0.33s     0.06s  apim-atlas-mkruniv7                 GET /api/services
+    0.41s     0.00s  atlas-orchestrator              message.send
+    0.49s    28.79s  atlas-orchestrator            executor.process triage_agent
+    0.49s    28.79s  atlas-orchestrator              atlas.node.triage_agent
+    0.49s    28.78s  atlas-orchestrator                invoke_agent triage_agent
+    0.49s     3.67s  atlas-orchestrator                  chat gpt-main
+    0.74s     3.41s  atlas-orchestrator                    POST /api/projects/atlas-mkruniv7/openai/v1/responses
+    4.16s     6.63s  atlas-orchestrator                  execute_tool lookup_service
+    4.16s     6.63s  atlas-orchestrator                    GET /ops/services/svc-checkout-api
+    4.18s     6.61s  apim-atlas-mkruniv7                     GET /ops/services/svc-checkout-api
+    4.18s     6.61s  apim-atlas-mkruniv7                       GET /api/services/svc-checkout-api
+    4.16s     0.08s  atlas-orchestrator                  execute_tool lookup_service
+    4.16s     0.08s  atlas-orchestrator                    GET /ops/services/svc-payments
+    4.20s     0.04s  apim-atlas-mkruniv7                     GET /ops/services/svc-payments
+    4.20s     0.04s  apim-atlas-mkruniv7                       GET /api/services/svc-payments
+   10.79s     2.93s  atlas-orchestrator                  chat gpt-main
+   10.80s     2.92s  atlas-orchestrator                    POST /api/projects/atlas-mkruniv7/openai/v1/responses
+   13.72s     0.48s  atlas-orchestrator                  execute_tool get_telemetry
+   13.72s     0.10s  atlas-orchestrator                    GET /ops/services/svc-checkout-api/health
+   13.72s     0.10s  apim-atlas-mkruniv7                     GET /ops/services/svc-checkout-api/health
+   13.73s     0.09s  apim-atlas-mkruniv7                       GET /api/services/svc-checkout-api/health
+   13.82s     0.38s  atlas-orchestrator                    GET /ops/services/svc-checkout-api
+   13.83s     0.37s  apim-atlas-mkruniv7                     GET /ops/services/svc-checkout-api
+   13.83s     0.37s  apim-atlas-mkruniv7                       GET /api/services/svc-checkout-api
+   13.72s     0.52s  atlas-orchestrator                  execute_tool get_telemetry
+   13.72s     0.46s  atlas-orchestrator                    GET /ops/services/svc-payments/health
+   13.75s     0.43s  apim-atlas-mkruniv7                     GET /ops/services/svc-payments/health
+   13.75s     0.43s  apim-atlas-mkruniv7                       GET /api/services/svc-payments/health
+   14.18s     0.05s  atlas-orchestrator                    GET /ops/services/svc-payments
+   14.19s     0.05s  apim-atlas-mkruniv7                     GET /ops/services/svc-payments
+   14.19s     0.05s  apim-atlas-mkruniv7                       GET /api/services/svc-payments
+   13.72s     7.18s  atlas-orchestrator                  execute_tool get_recent_changes
+   13.72s     7.17s  atlas-orchestrator                    GET /ops/changes
+   13.75s     7.14s  apim-atlas-mkruniv7                     GET /ops/changes
+   13.75s     7.14s  apim-atlas-mkruniv7                       GET /api/changes
+   13.72s     6.58s  atlas-orchestrator                  execute_tool get_recent_changes
+   13.72s     6.58s  atlas-orchestrator                    GET /ops/changes
+   13.75s     6.55s  apim-atlas-mkruniv7                     GET /ops/changes
+   13.75s     6.55s  apim-atlas-mkruniv7                       GET /api/changes
+   20.90s     8.38s  atlas-orchestrator                  chat gpt-main
+   20.92s     8.36s  atlas-orchestrator                    POST /api/projects/atlas-mkruniv7/openai/v1/responses
+   29.28s     0.00s  atlas-orchestrator              message.send
+   29.37s    13.70s  atlas-orchestrator            executor.process knowledge_agent
+   29.37s    13.70s  atlas-orchestrator              atlas.node.knowledge_agent
+   29.37s    13.70s  atlas-orchestrator                invoke_agent knowledge_agent
+   29.37s     4.07s  atlas-orchestrator                  chat gpt-main
+   29.37s     4.07s  atlas-orchestrator                    POST /api/projects/atlas-mkruniv7/openai/v1/responses
+   33.44s     0.63s  atlas-orchestrator                  execute_tool search_knowledge
+   33.44s     0.51s  atlas-orchestrator                    POST /openai/v1/embeddings
+   33.96s     0.00s  atlas-orchestrator                    _SearchClientOperationsMixin.search
+   33.96s     0.11s  atlas-orchestrator                    _SearchClientOperationsMixin._search_post
+   33.96s     0.11s  atlas-orchestrator                      POST /indexes('idx-atlas-knowledge')/docs/search.post.search
+   33.45s     0.56s  atlas-orchestrator                  execute_tool search_knowledge
+   33.45s     0.15s  atlas-orchestrator                    POST /openai/v1/embeddings
+   33.60s     0.00s  atlas-orchestrator                    _SearchClientOperationsMixin.search
+   33.61s     0.41s  atlas-orchestrator                    _SearchClientOperationsMixin._search_post
+   33.79s     0.22s  atlas-orchestrator                      POST /indexes('idx-atlas-knowledge')/docs/search.post.search
+   34.07s     2.01s  atlas-orchestrator                  chat gpt-main
+   34.08s     2.00s  atlas-orchestrator                    POST /api/projects/atlas-mkruniv7/openai/v1/responses
+   36.08s     0.11s  atlas-orchestrator                  execute_tool get_incident
+   36.08s     0.11s  atlas-orchestrator                    GET /ops/incidents/INC-2026-0320
+   36.08s     0.11s  apim-atlas-mkruniv7                     GET /ops/incidents/INC-2026-0320
+   36.09s     0.10s  apim-atlas-mkruniv7                       GET /api/incidents/INC-2026-0320
+   36.08s     0.07s  atlas-orchestrator                  execute_tool get_incident
+   36.08s     0.07s  atlas-orchestrator                    GET /ops/incidents/INC-2026-0097
+   36.08s     0.06s  apim-atlas-mkruniv7                     GET /ops/incidents/INC-2026-0097
+   36.09s     0.06s  apim-atlas-mkruniv7                       GET /api/incidents/INC-2026-0097
+   36.19s     6.87s  atlas-orchestrator                  chat gpt-main
+   36.21s     6.86s  atlas-orchestrator                    POST /api/projects/atlas-mkruniv7/openai/v1/responses
+   43.07s     0.00s  atlas-orchestrator              message.send
+   29.37s     8.84s  atlas-orchestrator            executor.process impact_agent
+   29.37s     8.84s  atlas-orchestrator              atlas.node.impact_agent
+   29.38s     8.83s  atlas-orchestrator                invoke_agent impact_agent
+   29.38s     2.85s  atlas-orchestrator                  chat gpt-main
+   29.38s     2.84s  atlas-orchestrator                    POST /api/projects/atlas-mkruniv7/openai/v1/responses
+   32.22s     0.00s  atlas-orchestrator                  execute_tool compute_blast_radius
+   32.22s     0.08s  atlas-orchestrator                  execute_tool lookup_service
+   32.22s     0.08s  atlas-orchestrator                    GET /ops/services/svc-payments
+   32.24s     0.06s  apim-atlas-mkruniv7                     GET /ops/services/svc-payments
+   32.24s     0.06s  apim-atlas-mkruniv7                       GET /api/services/svc-payments
+   32.22s     0.17s  atlas-orchestrator                  execute_tool lookup_service
+   32.22s     0.17s  atlas-orchestrator                    GET /ops/services/svc-checkout-api
+   32.25s     0.14s  apim-atlas-mkruniv7                     GET /ops/services/svc-checkout-api
+   32.25s     0.14s  apim-atlas-mkruniv7                       GET /api/services/svc-checkout-api
+   32.22s     0.73s  atlas-orchestrator                  execute_tool get_telemetry
+   32.22s     0.70s  atlas-orchestrator                    GET /ops/services/svc-payments/health
+   32.24s     0.68s  apim-atlas-mkruniv7                     GET /ops/services/svc-payments/health
+   32.24s     0.68s  apim-atlas-mkruniv7                       GET /api/services/svc-payments/health
+   32.92s     0.03s  atlas-orchestrator                    GET /ops/services/svc-payments
+   32.92s     0.03s  apim-atlas-mkruniv7                     GET /ops/services/svc-payments
+   32.92s     0.02s  apim-atlas-mkruniv7                       GET /api/services/svc-payments
+   32.22s     0.17s  atlas-orchestrator                  execute_tool get_telemetry
+   32.23s     0.14s  atlas-orchestrator                    GET /ops/services/svc-checkout-api/health
+   32.26s     0.11s  apim-atlas-mkruniv7                     GET /ops/services/svc-checkout-api/health
+   32.26s     0.11s  apim-atlas-mkruniv7                       GET /api/services/svc-checkout-api/health
+   32.37s     0.03s  atlas-orchestrator                    GET /ops/services/svc-checkout-api
+   32.37s     0.02s  apim-atlas-mkruniv7                     GET /ops/services/svc-checkout-api
+   32.37s     0.02s  apim-atlas-mkruniv7                       GET /api/services/svc-checkout-api
+   32.95s     5.26s  atlas-orchestrator                  chat gpt-main
+   32.97s     5.24s  atlas-orchestrator                    POST /api/projects/atlas-mkruniv7/openai/v1/responses
+   38.21s     0.00s  atlas-orchestrator              message.send
+   43.13s     0.00s  atlas-orchestrator            executor.process aggregate
+   43.13s     0.00s  atlas-orchestrator              message.send
+   43.19s    16.18s  atlas-orchestrator            executor.process planner_agent
+   43.19s    16.18s  atlas-orchestrator              atlas.node.planner_agent
+   43.19s    16.18s  atlas-orchestrator                invoke_agent planner_agent
+   43.19s     2.56s  atlas-orchestrator                  chat gpt-main
+   43.19s     2.55s  atlas-orchestrator                    POST /api/projects/atlas-mkruniv7/openai/v1/responses
+   45.75s     0.10s  atlas-orchestrator                  execute_tool lookup_service
+   45.75s     0.10s  atlas-orchestrator                    GET /ops/services/svc-checkout-api
+   45.79s     0.05s  apim-atlas-mkruniv7                     GET /ops/services/svc-checkout-api
+   45.79s     0.05s  apim-atlas-mkruniv7                       GET /api/services/svc-checkout-api
+   45.75s     0.07s  atlas-orchestrator                  execute_tool lookup_service
+   45.75s     0.07s  atlas-orchestrator                    GET /ops/services/svc-payments
+   45.78s     0.04s  apim-atlas-mkruniv7                     GET /ops/services/svc-payments
+   45.78s     0.04s  apim-atlas-mkruniv7                       GET /api/services/svc-payments
+   45.75s     0.33s  atlas-orchestrator                  execute_tool search_knowledge
+   45.75s     0.25s  atlas-orchestrator                    POST /openai/v1/embeddings
+   46.00s     0.00s  atlas-orchestrator                    _SearchClientOperationsMixin.search
+   46.00s     0.08s  atlas-orchestrator                    _SearchClientOperationsMixin._search_post
+   46.01s     0.07s  atlas-orchestrator                      POST /indexes('idx-atlas-knowledge')/docs/search.post.search
+   45.75s     0.30s  atlas-orchestrator                  execute_tool search_knowledge
+   45.75s     0.18s  atlas-orchestrator                    POST /openai/v1/embeddings
+   45.94s     0.00s  atlas-orchestrator                    _SearchClientOperationsMixin.search
+   45.94s     0.11s  atlas-orchestrator                    _SearchClientOperationsMixin._search_post
+   45.94s     0.11s  atlas-orchestrator                      POST /indexes('idx-atlas-knowledge')/docs/search.post.search
+   45.75s     0.41s  atlas-orchestrator                  execute_tool search_knowledge
+   45.75s     0.26s  atlas-orchestrator                    POST /openai/v1/embeddings
+   46.02s     0.00s  atlas-orchestrator                    _SearchClientOperationsMixin.search
+   46.02s     0.14s  atlas-orchestrator                    _SearchClientOperationsMixin._search_post
+   46.02s     0.14s  atlas-orchestrator                      POST /indexes('idx-atlas-knowledge')/docs/search.post.search
+   46.16s    13.21s  atlas-orchestrator                  chat gpt-main
+   46.18s    13.19s  atlas-orchestrator                    POST /api/projects/atlas-mkruniv7/openai/v1/responses
+   59.37s     0.00s  atlas-orchestrator              message.send
+   59.45s     0.00s  atlas-orchestrator            executor.process policy_gate
+   59.46s     0.00s  atlas-orchestrator              message.send
+   59.52s     0.00s  atlas-orchestrator            executor.process approval
+   59.62s     0.16s  atlas-orchestrator            POST /workflows/approvals
+   59.66s     0.12s  apim-atlas-mkruniv7             POST /workflows/approvals
+   59.66s     0.12s  apim-atlas-mkruniv7               POST /api/approve-remediation/triggers/When_an_approval_is_requested/invoke
+   59.69s     0.09s  logic-atlas-mkruniv7                approve-remediation
+   60.38s     1.66s  atlas-orchestrator        atlas.dispatch
+   60.39s     0.24s  atlas-orchestrator          POST /ops/tickets
+   60.41s     0.21s  apim-atlas-mkruniv7           POST /ops/tickets
+   60.42s     0.21s  apim-atlas-mkruniv7             POST /api/tickets
+   60.65s     1.36s  atlas-orchestrator          POST /ops/remediation/commands
+   60.65s     1.36s  apim-atlas-mkruniv7           POST /ops/remediation/commands
+   60.66s     1.35s  apim-atlas-mkruniv7             POST /api/remediation/commands
+   59.69s     0.09s  logic-atlas-mkruniv7    approve-remediation.When_an_approval_is_requested.TriggerInvocation  (parent not ingested)
+   59.76s     0.01s  logic-atlas-mkruniv7    approve-remediation.Accepted.ActionInvocation  (parent not ingested)
+   59.81s     0.00s  logic-atlas-mkruniv7    approve-remediation.Notify_approvers.ActionInvocation  (parent not ingested)
+   59.82s     0.00s  logic-atlas-mkruniv7    approve-remediation.Post_console_link.ActionInvocation  (parent not ingested)
+   59.85s     0.13s  logic-atlas-mkruniv7    approve-remediation.Wait_for_decision.ActionInvocation  (parent not ingested)
+   59.86s     0.11s  logic-atlas-mkruniv7      POST /api/callbacks/approvals
+   60.51s     0.03s  logic-atlas-mkruniv7    approve-remediation.Wait_for_decision.ActionInvocation  (parent not ingested)
+   60.53s     0.01s  logic-atlas-mkruniv7      POST /api/callbacks/approvals
+   60.55s     0.00s  logic-atlas-mkruniv7    approve-remediation.Wait_for_decision.ActionInvocation  (parent not ingested)
+   60.58s     0.00s  logic-atlas-mkruniv7    approve-remediation.Record_decision.ActionInvocation  (parent not ingested)
+   60.95s     1.04s  atlas-ops-api           atlas.remediation.enqueue  (parent not ingested)
+   61.50s     0.00s  atlas-ops-api             ServiceBus.message
+   61.59s    28.74s  atlas-worker                atlas.worker.remediation
+   61.73s     0.00s  atlas-worker                  ServiceBus.message
+   61.73s     0.02s  atlas-worker                  ServiceBus.send
+   64.15s     0.00s  atlas-worker                  ServiceBus.message
+   64.15s     0.15s  atlas-worker                  ServiceBus.send
+   64.31s     0.00s  atlas-worker                  ServiceBus.message
+   64.31s     0.01s  atlas-worker                  ServiceBus.send
+   68.52s     0.00s  atlas-worker                  ServiceBus.message
+   68.52s     0.01s  atlas-worker                  ServiceBus.send
+   68.54s     0.00s  atlas-worker                  ServiceBus.message
+   68.54s     0.01s  atlas-worker                  ServiceBus.send
+   73.09s     0.00s  atlas-worker                  ServiceBus.message
+   73.09s     0.01s  atlas-worker                  ServiceBus.send
+   73.12s     0.00s  atlas-worker                  ServiceBus.message
+   73.12s     0.02s  atlas-worker                  ServiceBus.send
+   77.81s     0.00s  atlas-worker                  ServiceBus.message
+   77.81s     0.01s  atlas-worker                  ServiceBus.send
+   77.83s     0.00s  atlas-worker                  ServiceBus.message
+   77.83s     0.01s  atlas-worker                  ServiceBus.send
+   81.37s     0.00s  atlas-worker                  ServiceBus.message
+   81.37s     0.01s  atlas-worker                  ServiceBus.send
+   81.39s     0.00s  atlas-worker                  ServiceBus.message
+   81.39s     0.02s  atlas-worker                  ServiceBus.send
+   84.90s     0.00s  atlas-worker                  ServiceBus.message
+   84.90s     0.01s  atlas-worker                  ServiceBus.send
+   84.92s     0.00s  atlas-worker                  ServiceBus.message
+   84.92s     0.01s  atlas-worker                  ServiceBus.send
+   87.88s     0.00s  atlas-worker                  ServiceBus.message
+   87.88s     0.01s  atlas-worker                  ServiceBus.send
+   87.90s     0.00s  atlas-worker                  ServiceBus.message
+   87.90s     0.02s  atlas-worker                  ServiceBus.send
+   90.27s     0.00s  atlas-worker                  ServiceBus.message
+   90.27s     0.01s  atlas-worker                  ServiceBus.send
+   90.30s     0.00s  atlas-worker                  ServiceBus.message
+   90.30s     0.03s  atlas-worker                  ServiceBus.send
+   90.33s     0.00s  atlas-worker                  ServiceBus.complete
+   61.50s     0.04s  atlas-ops-api             ServiceBus.send
+
+PASS  hop web
+PASS  hop orchestrator
+PASS  hop agent nodes
+PASS  hop APIM
+PASS  hop ops-api Function
+PASS  hop Service Bus
+PASS  hop worker
+INFO  hop Logic App: present
+INFO  hop MCP Function: not on this path
+PASS  atlas.case_id on 226/226 ATLAS spans

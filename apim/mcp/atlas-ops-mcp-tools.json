@@ -1,0 +1,37 @@
+{
+  "_comment": "atlas-ops-mcp tools (PHASE-09). The descriptions here are what every agent surface sees: APIM serves them to the toolbox, and the in-process agents read them from the same MCP server. Changing one in APIM - here plus azd provision, or live with scripts/inject_bad_tool_description.py - changes all four surfaces within the 60 s catalogue cache. tests/test_gateway.py keeps the in-process docstrings (the offline fallback) in step.",
+  "tools": [
+    {
+      "name": "lookup_service",
+      "operation": "getService",
+      "description": "Look up one Contoso service in the service catalogue (CMDB).\n\nUse this FIRST for every service mentioned in a report, before relying on its tier,\nowner, SLO, dependencies or change-freeze status.\n\nDo not use this to search for services by description; it needs the exact id. Do not use\nit for incidents or changes.\n\nReturns the service record: tier (1 is revenue-critical), owner team, on-call rotation,\nSLO targets, `depends_on` (what this service needs), runbook ids, and `change_freeze`.\nReturns NotFound if the id does not exist, or ToolFailure if the catalogue is unreachable."
+    },
+    {
+      "name": "get_incident",
+      "operation": "getIncident",
+      "description": "Fetch one historical incident by its exact id.\n\nUse this when a report, a search result or the user names a specific incident id and you\nneed its full details: root cause, resolution, linked changes, time to mitigate.\n\nDo not use this to find similar incidents - use `search_knowledge` with\nkind='past_incidents' for that. Never invent an incident id to call this with.\n\nReturns the incident, NotFound if the id does not exist, or ToolFailure if unreachable."
+    },
+    {
+      "name": "get_recent_changes",
+      "operation": "listChanges",
+      "description": "List deployments to one service in the last `since_minutes` minutes, newest first.\n\nUse this to correlate a symptom with a deployment. A high-risk change that landed shortly\nbefore the symptom began is the strongest single signal available. Check the affected\nservice and the services it depends on.\n\nEach change has an id, author, summary, risk, whether a rollback is available, and status.\nCite change ids exactly as returned. An empty list means no deployments in the window."
+    },
+    {
+      "name": "get_telemetry",
+      "operation": "getServiceHealth",
+      "description": "Summarise one service's metrics over the last `window_minutes` minutes.\n\nUse this to confirm a reported symptom and find when it began, rather than trusting the\nreport alone. Compare `peak_p95_ms` with `slo_p95_ms`, and use `first_anomaly_at` as the\nonset time when correlating with changes.\n\nReturns counts of anomalous windows, the onset time, peak latency and error rate, and the\nworst SLO burn rate (a multiple of the error-budget spend rate). All peaks are null if no\ntelemetry exists for the period."
+    },
+    {
+      "name": "compute_blast_radius",
+      "operation": "getBlastRadius",
+      "description": "Compute which services are affected if `service_id` fails, up to `depth` hops.\n\nThis is an exact dependency-graph walk, not an estimate. Use it for the suspected cause of\nan incident before judging impact. Never state a blast radius without calling this.\n\nReturns the affected service ids, how many there are, which are Tier 1, and one dependency\npath to each so you can explain why a service is affected."
+    },
+    {
+      "name": "enrich_incident",
+      "api": "atlas-workflows",
+      "operation": "enrich",
+      "in_process": false,
+      "description": "Enrich an incident about ONE service in a single call: the service record, its on-call rotation, recent deployments, health over the window, and the provider status page, gathered by a workflow and returned together.\n\nUse this at the START of an investigation, when a report names a service and you want the full picture before reasoning about cause.\n\nDo NOT use this to take any action - it only reads. Do NOT use it for several services at once; call it once per service. Do NOT use it when you only need one fact (use lookup_service or get_recent_changes instead: they are faster).\n\nArguments: service_id (exact catalogue id, for example svc-payments); window_minutes (optional, default 60). Any part that could not be fetched is listed in `unavailable`."
+    }
+  ]
+}

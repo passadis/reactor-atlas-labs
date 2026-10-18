@@ -1,0 +1,179 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_enrichment_is_requested": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "method": "POST",
+          "schema": {
+            "type": "object",
+            "required": [
+              "service_id"
+            ],
+            "properties": {
+              "service_id": {
+                "type": "string"
+              },
+              "window_minutes": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "Get_service": {
+        "type": "Http",
+        "runAfter": {},
+        "inputs": {
+          "method": "GET",
+          "uri": "@{parameters('gatewayUrl')}/ops/services/@{triggerBody()?['service_id']}",
+          "headers": {
+            "Ocp-Apim-Subscription-Key": "@parameters('apimKey')",
+            "x-atlas-agent": "enrich-incident"
+          },
+          "authentication": {
+            "type": "ManagedServiceIdentity",
+            "identity": "@parameters('logicIdentityId')",
+            "audience": "@parameters('gatewayAudience')"
+          }
+        },
+        "limit": {
+          "timeout": "PT20S"
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs"
+            ]
+          }
+        }
+      },
+      "Get_recent_changes": {
+        "type": "Http",
+        "runAfter": {},
+        "inputs": {
+          "method": "GET",
+          "uri": "@{parameters('gatewayUrl')}/ops/changes?service_id=@{triggerBody()?['service_id']}&since_minutes=@{coalesce(triggerBody()?['window_minutes'], 240)}",
+          "headers": {
+            "Ocp-Apim-Subscription-Key": "@parameters('apimKey')",
+            "x-atlas-agent": "enrich-incident"
+          },
+          "authentication": {
+            "type": "ManagedServiceIdentity",
+            "identity": "@parameters('logicIdentityId')",
+            "audience": "@parameters('gatewayAudience')"
+          }
+        },
+        "limit": {
+          "timeout": "PT20S"
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs"
+            ]
+          }
+        }
+      },
+      "Get_health": {
+        "type": "Http",
+        "runAfter": {},
+        "inputs": {
+          "method": "GET",
+          "uri": "@{parameters('gatewayUrl')}/ops/services/@{triggerBody()?['service_id']}/health?window_minutes=@{coalesce(triggerBody()?['window_minutes'], 60)}",
+          "headers": {
+            "Ocp-Apim-Subscription-Key": "@parameters('apimKey')",
+            "x-atlas-agent": "enrich-incident"
+          },
+          "authentication": {
+            "type": "ManagedServiceIdentity",
+            "identity": "@parameters('logicIdentityId')",
+            "audience": "@parameters('gatewayAudience')"
+          }
+        },
+        "limit": {
+          "timeout": "PT20S"
+        },
+        "runtimeConfiguration": {
+          "secureData": {
+            "properties": [
+              "inputs"
+            ]
+          }
+        }
+      },
+      "Check_external_status_page": {
+        "type": "Compose",
+        "runAfter": {},
+        "inputs": {
+          "provider": "status.contoso.example (simulated)",
+          "status": "operational",
+          "checked_at": "@{utcNow()}"
+        }
+      },
+      "Aggregate": {
+        "type": "Compose",
+        "runAfter": {
+          "Get_service": [
+            "Succeeded",
+            "Failed",
+            "TimedOut",
+            "Skipped"
+          ],
+          "Get_recent_changes": [
+            "Succeeded",
+            "Failed",
+            "TimedOut",
+            "Skipped"
+          ],
+          "Get_health": [
+            "Succeeded",
+            "Failed",
+            "TimedOut",
+            "Skipped"
+          ],
+          "Check_external_status_page": [
+            "Succeeded",
+            "Failed",
+            "TimedOut",
+            "Skipped"
+          ]
+        },
+        "inputs": {
+          "service_id": "@triggerBody()?['service_id']",
+          "service": "@if(equals(actions('Get_service')?['status'], 'Succeeded'), body('Get_service'), null)",
+          "on_call_rotation": "@if(equals(actions('Get_service')?['status'], 'Succeeded'), body('Get_service')?['on_call_rotation'], null)",
+          "recent_changes": "@if(equals(actions('Get_recent_changes')?['status'], 'Succeeded'), body('Get_recent_changes')?['changes'], null)",
+          "health": "@if(equals(actions('Get_health')?['status'], 'Succeeded'), body('Get_health'), null)",
+          "external_status": "@outputs('Check_external_status_page')",
+          "unavailable": "@union(if(equals(actions('Get_service')?['status'], 'Succeeded'), json('[]'), createArray('service')), if(equals(actions('Get_recent_changes')?['status'], 'Succeeded'), json('[]'), createArray('recent_changes')), if(equals(actions('Get_health')?['status'], 'Succeeded'), json('[]'), createArray('health')))",
+          "enriched_at": "@{utcNow()}",
+          "source": "logic app enrich-incident, through the ATLAS gateway"
+        }
+      },
+      "Response": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": {
+          "Aggregate": [
+            "Succeeded"
+          ]
+        },
+        "inputs": {
+          "statusCode": 200,
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": "@outputs('Aggregate')"
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "kind": "Stateful"
+}

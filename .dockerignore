@@ -1,0 +1,8 @@
+# Build context is the repo root. Allow-list: only what the service images need.
+*
+!pyproject.toml
+!uv.lock
+!src/
+src/**/__pycache__
+src/**/*.pyc
+src/**/.pytest_cache

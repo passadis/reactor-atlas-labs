@@ -1,0 +1,32 @@
+{
+  "_comment": "Resource name abbreviations. Names are formed as <abbrev>-atlas-<token>, per CLAUDE.md section 3. Storage and ACR strip the hyphens because those resource types disallow them.",
+
+  "cognitiveServicesAccount": "aif",
+  "cognitiveServicesProject": "proj",
+
+  "operationalInsightsWorkspace": "log",
+  "insightsComponent": "appi",
+  "portalDashboard": "dash",
+  "insightsActionGroup": "ag",
+
+  "documentDbDatabaseAccount": "cosmos",
+  "searchSearchService": "srch",
+  "storageStorageAccount": "st",
+  "keyVaultVault": "kv",
+
+  "serviceBusNamespace": "sb",
+
+  "containerRegistryRegistry": "cr",
+  "appManagedEnvironment": "cae",
+  "appContainerApp": "ca",
+
+  "webSitesFunctions": "func",
+  "webServerFarm": "plan",
+  "webSitesLogicApp": "logic",
+
+  "apiManagementService": "apim",
+
+  "managedIdentityUserAssignedIdentity": "id",
+
+  "cacheRedisEnterprise": "redis"
+}

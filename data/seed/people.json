@@ -1,0 +1,114 @@
+[
+  {
+    "display_name": "Ana Novak",
+    "email": "anovak@contoso.example",
+    "role": "sre",
+    "team": "team-commerce",
+    "user_id": "u-anovak"
+  },
+  {
+    "display_name": "Bode Oyelaran",
+    "email": "boyelaran@contoso.example",
+    "role": "sre",
+    "team": "team-payments",
+    "user_id": "u-boyelaran"
+  },
+  {
+    "display_name": "Camille Dubois",
+    "email": "cdubois@contoso.example",
+    "role": "engineer",
+    "team": "team-platform",
+    "user_id": "u-cdubois"
+  },
+  {
+    "display_name": "Dag Svensson",
+    "email": "dsvensson@contoso.example",
+    "role": "engineer",
+    "team": "team-payments",
+    "user_id": "u-dsvensson"
+  },
+  {
+    "display_name": "Elise Moreau",
+    "email": "emoreau@contoso.example",
+    "role": "engineer",
+    "team": "team-commerce",
+    "user_id": "u-emoreau"
+  },
+  {
+    "display_name": "Farid Haddad",
+    "email": "fhaddad@contoso.example",
+    "role": "sre",
+    "team": "team-risk",
+    "user_id": "u-fhaddad"
+  },
+  {
+    "display_name": "Goro Tanaka",
+    "email": "gtanaka@contoso.example",
+    "role": "engineer",
+    "team": "team-finance",
+    "user_id": "u-gtanaka"
+  },
+  {
+    "display_name": "Hanna Oconnor",
+    "email": "hoconnor@contoso.example",
+    "role": "manager",
+    "team": "team-commerce",
+    "user_id": "u-hoconnor"
+  },
+  {
+    "display_name": "Ines Bergmann",
+    "email": "ibergmann@contoso.example",
+    "role": "manager",
+    "team": "team-platform",
+    "user_id": "u-ibergmann"
+  },
+  {
+    "display_name": "Jacopo Rossi",
+    "email": "jrossi@contoso.example",
+    "role": "engineer",
+    "team": "team-supply",
+    "user_id": "u-jrossi"
+  },
+  {
+    "display_name": "Kira Petrova",
+    "email": "kpetrova@contoso.example",
+    "role": "engineer",
+    "team": "team-messaging",
+    "user_id": "u-kpetrova"
+  },
+  {
+    "display_name": "Luca Marchetti",
+    "email": "lmarchetti@contoso.example",
+    "role": "engineer",
+    "team": "team-discovery",
+    "user_id": "u-lmarchetti"
+  },
+  {
+    "display_name": "Mara Abiodun",
+    "email": "mabiodun@contoso.example",
+    "role": "director",
+    "team": "team-data",
+    "user_id": "u-mabiodun"
+  },
+  {
+    "display_name": "Nikolaj Kowalski",
+    "email": "nkowalski@contoso.example",
+    "role": "engineer",
+    "team": "team-internal",
+    "user_id": "u-nkowalski"
+  },
+  {
+    "display_name": "Olle Lindqvist",
+    "email": "olindqvist@contoso.example",
+    "role": "engineer",
+    "team": "team-growth",
+    "user_id": "u-olindqvist"
+  },
+  {
+    "display_name": "Robin Reed",
+    "email": "readonly@contoso.example",
+    "role": "readonly",
+    "team": "team-internal",
+    "user_id": "u-readonly"
+  }
+]

@@ -36,3 +36,20 @@ verification-report.json
 *.log
 .DS_Store
 Thumbs.db
+.env.local
+agents/.azure/
+.pytest-tmp/
+agents/src/
+agents/.generated/
+
+# Stamped at package time (scripts/stamp_version.sh)
+src/atlas_common/atlas_common/_version.py
+
+# Office lock files (created while a document is open)
+~$*
+# The original Episode 1 deck as received; the corrected copy is tracked
+_labpack/Agent Foundations.pptx
+_labpack/Workflow and Approval - ATLAS - original.pptx
+
+# Presentation decks: edited by the presenter locally, not tracked
+_labpack/*.pptx

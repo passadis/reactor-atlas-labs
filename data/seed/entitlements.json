@@ -1,0 +1,67 @@
+[
+  {
+    "max_blast_radius": 3,
+    "may_approve_risk": [
+      "low"
+    ],
+    "may_approve_tiers": [
+      3,
+      4
+    ],
+    "may_execute": true,
+    "role": "engineer"
+  },
+  {
+    "max_blast_radius": 8,
+    "may_approve_risk": [
+      "low",
+      "medium"
+    ],
+    "may_approve_tiers": [
+      2,
+      3,
+      4
+    ],
+    "may_execute": true,
+    "role": "sre"
+  },
+  {
+    "max_blast_radius": 15,
+    "may_approve_risk": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "may_approve_tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "may_execute": false,
+    "role": "manager"
+  },
+  {
+    "max_blast_radius": 25,
+    "may_approve_risk": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "may_approve_tiers": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "may_execute": false,
+    "role": "director"
+  },
+  {
+    "max_blast_radius": 0,
+    "may_approve_risk": [],
+    "may_approve_tiers": [],
+    "may_execute": false,
+    "role": "readonly"
+  }
+]

@@ -1,0 +1,9 @@
+// Section 2 - Tool health: calls and latency per tool, from the execute_tool spans.
+// Tools never raise to the model (a failure becomes a typed ToolFailure), so failures are counted
+// from the tool.failure events per backend in the next query, not from span status.
+dependencies
+| where name startswith "execute_tool "
+| extend tool = substring(name, 13)
+| summarize calls = count(), p50_s = round(percentile(duration, 50) / 1000, 2),
+            p95_s = round(percentile(duration, 95) / 1000, 2) by tool
+| order by calls desc

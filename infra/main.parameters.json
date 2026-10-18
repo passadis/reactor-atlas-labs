@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": { "value": "${AZURE_ENV_NAME}" },
+    "location": { "value": "${AZURE_LOCATION=eastus2}" },
+    "searchLocation": { "value": "${ATLAS_SEARCH_LOCATION=eastus}" },
+    "principalId": { "value": "${AZURE_PRINCIPAL_ID}" },
+    "principalType": { "value": "${ATLAS_PRINCIPAL_TYPE=User}" },
+    "owner": { "value": "${ATLAS_OWNER=reactor-demo}" },
+    "deleteAfter": { "value": "${ATLAS_DELETE_AFTER=2026-12-31}" },
+    "opsEmail": { "value": "${ATLAS_OPS_EMAIL=atlas-ops@contoso.example}" },
+    "gptMainModelName": { "value": "${ATLAS_GPT_MAIN_MODEL=gpt-5.4}" },
+    "gptMainModelVersion": { "value": "${ATLAS_GPT_MAIN_VERSION=2026-03-05}" },
+    "gptMainCapacity": { "value": "${ATLAS_GPT_MAIN_CAPACITY=1000}" },
+    "gptJudgeModelName": { "value": "${ATLAS_GPT_JUDGE_MODEL=gpt-5.4-mini}" },
+    "gptJudgeModelVersion": { "value": "${ATLAS_GPT_JUDGE_VERSION=2026-03-17}" },
+    "gptJudgeCapacity": { "value": "${ATLAS_GPT_JUDGE_CAPACITY=100}" },
+    "embedModelName": { "value": "${ATLAS_EMBED_MODEL=text-embedding-3-large}" },
+    "embedModelVersion": { "value": "${ATLAS_EMBED_VERSION=1}" },
+    "embedCapacity": { "value": "${ATLAS_EMBED_CAPACITY=120}" },
+    "enableSemanticCache": { "value": "${ATLAS_ENABLE_SEMANTIC_CACHE=false}" },
+    "captureContent": { "value": "${ATLAS_CAPTURE_CONTENT=true}" },
+    "scaleProfile": { "value": "${ATLAS_SCALE_PROFILE=work}" },
+    "ciPrincipalId": { "value": "${ATLAS_CI_PRINCIPAL_ID=}" },
+    "webAppClientId": { "value": "${ATLAS_WEB_APP_CLIENT_ID=}" },
+    "gatewayAppClientId": {
+      "value": "${ATLAS_GATEWAY_APP_CLIENT_ID=}"
+    },
+    "opsApiClientId": { "value": "${ATLAS_OPSAPI_APP_CLIENT_ID=}" },
+    "webImage": { "value": "${SERVICE_WEB_IMAGE_NAME=}" },
+    "orchestratorImage": { "value": "${SERVICE_ORCHESTRATOR_IMAGE_NAME=}" },
+    "workerImage": { "value": "${SERVICE_WORKER_IMAGE_NAME=}" },
+    "hostedAgentPrincipalId": { "value": "${ATLAS_HOSTED_AGENT_PRINCIPAL_ID=}" }
+  }
+}

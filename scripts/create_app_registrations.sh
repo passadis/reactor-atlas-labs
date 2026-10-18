@@ -1,0 +1,280 @@
+#!/usr/bin/env bash
+# Create the three Entra application registrations ATLAS needs.
+#
+# Entra objects are not ARM resources, so Bicep cannot create them. This runs alongside
+# `azd provision` rather than inside it.
+#
+# Moved here from Phase 09 deliberately (CLAUDE.md section 7.13): Phase 08 platform auth and
+# Phase 09 validate-jwt both depend on these, and a wrong audience or a missing app role surfaces
+# as a 401 that looks exactly like a policy bug. Getting them in place early makes that class of
+# failure impossible to misdiagnose later.
+#
+# Idempotent: re-running updates in place and never creates duplicates.
+#
+#   bash scripts/create_app_registrations.sh            # create or update
+#   bash scripts/create_app_registrations.sh --show     # report only, change nothing
+set -uo pipefail
+export PYTHONIOENCODING=utf-8
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+SHOW_ONLY=0
+[ "${1:-}" = "--show" ] && SHOW_ONLY=1
+
+TENANT_ID="$(az account show --query tenantId -o tsv 2>/dev/null)"
+if [ -z "$TENANT_ID" ]; then echo "not signed in (az login)" >&2; exit 1; fi
+
+echo "ATLAS app registrations  (tenant ${TENANT_ID})"
+echo "================================================"
+echo
+
+# Stable role ids. Deterministic so re-running never rotates them and so a token issued before a
+# re-run stays valid.
+ROLE_ENGINEER="6f1d3a41-0b9c-4d5e-9a2f-11c0a7e4b301"
+ROLE_APPROVER="7a2e4b52-1c0d-4e6f-8b3a-22d1b8f5c412"
+ROLE_READONLY="8b3f5c63-2d1e-4f70-9c4b-33e2c9a6d523"
+ROLE_AGENT="9c4a6d74-3e2f-4081-ad5c-44f3dab7e634"
+ROLE_DIRECTOR="ad5b7e85-4f30-4192-be6d-55a4ebc8f745"
+
+get_app_id() { az ad app list --filter "displayName eq '$1'" --query "[0].appId" -o tsv 2>/dev/null; }
+
+# ---------------------------------------------------------------------------- atlas-web --
+# Container Apps Easy Auth for the UI. App roles drive the approval console: Atlas.Approver is what
+# the entitlement check reads, and the readonly demo persona must NOT hold it - Episode 4's
+# `unauthorized` eval category depends on that being true.
+web_manifest() {
+  cat <<JSON
+[
+  {"allowedMemberTypes":["User"],"description":"Raise and triage incidents","displayName":"Atlas Engineer","id":"${ROLE_ENGINEER}","isEnabled":true,"value":"Atlas.Engineer"},
+  {"allowedMemberTypes":["User"],"description":"Approve remediation plans","displayName":"Atlas Approver","id":"${ROLE_APPROVER}","isEnabled":true,"value":"Atlas.Approver"},
+  {"allowedMemberTypes":["User"],"description":"Read-only access. Deliberately cannot approve.","displayName":"Atlas ReadOnly","id":"${ROLE_READONLY}","isEnabled":true,"value":"Atlas.ReadOnly"},
+  {"allowedMemberTypes":["User"],"description":"Approve director-level plans (break-glass). The presenter's role.","displayName":"Atlas Director","id":"${ROLE_DIRECTOR}","isEnabled":true,"value":"Atlas.Director"}
+]
+JSON
+}
+
+# ---------------------------------------------------------------------------- atlas-gateway --
+# The audience APIM validates on inbound calls. Atlas.Agent is assigned to the orchestrator identity
+# and to the hosted agent's Entra agent identity.
+gateway_manifest() {
+  cat <<JSON
+[
+  {"allowedMemberTypes":["Application"],"description":"Call ATLAS tools through the gateway","displayName":"Atlas Agent","id":"${ROLE_AGENT}","isEnabled":true,"value":"Atlas.Agent"}
+]
+JSON
+}
+
+# All diagnostics go to STDERR. Only the appId goes to stdout, because the caller captures it
+# with $(...) - mixing the two silently swallowed a real failure the first time this ran.
+say() { printf '%s\n' "$*" >&2; }
+
+ensure_app() { # displayName | identifierUri (or "-") | roles-json-file (or "-")
+  local name="$1" uri="$2" roles="$3"
+  local appId objId err
+
+  appId="$(get_app_id "$name")"
+
+  if [ "$SHOW_ONLY" = "1" ]; then
+    say "  ${name}: ${appId:-NOT CREATED}"
+    printf '%s' "$appId"
+    return 0
+  fi
+
+  if [ -z "$appId" ]; then
+    say "creating ${name}"
+    appId="$(az ad app create --display-name "$name" --sign-in-audience AzureADMyOrg --query appId -o tsv 2>/dev/null)"
+    if [ -z "$appId" ]; then say "  ERROR: could not create ${name}"; return 1; fi
+    sleep 5   # Entra is eventually consistent; a create is not immediately visible to a patch.
+  else
+    say "updating ${name} (${appId})"
+  fi
+
+  objId="$(az ad app show --id "$appId" --query id -o tsv 2>/dev/null)"
+
+  if [ "$roles" != "-" ]; then
+    if err="$(az ad app update --id "$appId" --app-roles "@${roles}" 2>&1)"; then
+      say "  app roles applied"
+    else
+      say "  ERROR applying app roles: $(printf '%s' "$err" | head -1)"
+      return 1
+    fi
+  fi
+
+  if [ "$uri" != "-" ]; then
+    # This tenant's default policy rejects a bare api://<name> identifier URI: "All newly added
+    # URIs must contain a tenant verified domain, tenant ID, or app ID." Requesting v2 access
+    # tokens lifts that restriction, which keeps the readable audience the design calls for
+    # instead of falling back to api://<appId>. v2 tokens also match the v2.0 openid-config URL
+    # the Phase 09 validate-jwt policy uses, so the two stay consistent.
+    az rest --method PATCH \
+      --url "https://graph.microsoft.com/v1.0/applications/${objId}" \
+      --headers "Content-Type=application/json" \
+      --body '{"api":{"requestedAccessTokenVersion":2}}' >/dev/null 2>&1 \
+      && say "  requestedAccessTokenVersion=2" \
+      || say "  WARN: could not set requestedAccessTokenVersion"
+    sleep 3
+
+    if err="$(az ad app update --id "$appId" --identifier-uris "$uri" 2>&1)"; then
+      say "  identifier uri ${uri}"
+    else
+      say "  ERROR setting identifier uri ${uri}: $(printf '%s' "$err" | head -1)"
+      return 1
+    fi
+
+    # Verify rather than trust. This is the check that would have caught the silent failure.
+    local actual
+    actual="$(az ad app show --id "$appId" --query "join(',', identifierUris)" -o tsv 2>/dev/null)"
+    if [ "$actual" != "$uri" ]; then
+      say "  ERROR: identifier uri did not stick (got '${actual:-none}', wanted '${uri}')"
+      return 1
+    fi
+  fi
+
+  if ! az ad sp show --id "$appId" >/dev/null 2>&1; then
+    az ad sp create --id "$appId" >/dev/null 2>&1 && say "  service principal created"
+  fi
+
+  printf '%s' "$appId"
+}
+
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+web_manifest > "$TMP/web-roles.json"
+gateway_manifest > "$TMP/gateway-roles.json"
+
+WEB_APP_ID="$(ensure_app 'atlas-web' '-' "$TMP/web-roles.json" | tail -1)"
+GATEWAY_APP_ID="$(ensure_app 'atlas-gateway' 'api://atlas-gateway' "$TMP/gateway-roles.json" | tail -1)"
+OPSAPI_APP_ID="$(ensure_app 'atlas-ops-api' 'api://atlas-ops-api' '-' | tail -1)"
+
+# ---------------------------------------------------------------- atlas-web sign-in (Phase 04) --
+# Container Apps built-in auth with NO client secret: the platform uses the implicit flow and asks
+# Entra for an ID token, so the registration must allow ID tokens and list the Easy Auth callback.
+# The web app also accepts bearer tokens for its own API, which is how verify_phase04 and
+# sse_probe call it as a real signed-in user: the Azure CLI is pre-authorized for one delegated
+# scope, so `az account get-access-token --scope api://atlas-web/user_impersonation` just works.
+SCOPE_WEB_USER="a5d6e7f8-4f30-4192-be6d-55a4ebc8f745"
+AZURE_CLI_APP_ID="04b07795-8ddb-461a-bbee-02f9e1bf7b46"
+
+configure_web_signin() {
+  local appId="$1" web_url objId callback
+  web_url="$(azd env get-value ATLAS_WEB_URL 2>/dev/null || true)"
+  objId="$(az ad app show --id "$appId" --query id -o tsv 2>/dev/null)"
+  if [ -z "$web_url" ] || [ -z "$objId" ]; then
+    say "  WARN: ATLAS_WEB_URL not in azd env yet; run after azd provision"
+    return 0
+  fi
+  callback="${web_url%/}/.auth/login/aad/callback"
+  local graph="https://graph.microsoft.com/v1.0/applications/${objId}"
+
+  az rest --method PATCH --url "$graph" --headers "Content-Type=application/json" --body "{
+    \"web\": {\"redirectUris\": [\"${callback}\"],
+             \"implicitGrantSettings\": {\"enableIdTokenIssuance\": true}},
+    \"api\": {\"requestedAccessTokenVersion\": 2,
+             \"oauth2PermissionScopes\": [{\"id\": \"${SCOPE_WEB_USER}\", \"value\": \"user_impersonation\",
+               \"type\": \"User\", \"isEnabled\": true,
+               \"adminConsentDisplayName\": \"Use ATLAS\", \"adminConsentDescription\": \"Use ATLAS as the signed-in user\",
+               \"userConsentDisplayName\": \"Use ATLAS\", \"userConsentDescription\": \"Use ATLAS as you\"}]}
+  }" >/dev/null 2>&1 && say "  sign-in: callback ${callback}, ID tokens on, scope user_impersonation" \
+    || { say "  ERROR configuring atlas-web sign-in"; return 1; }
+  sleep 3
+  az ad app update --id "$appId" --identifier-uris "api://atlas-web" >/dev/null 2>&1 \
+    && say "  identifier uri api://atlas-web" || say "  WARN: identifier uri not set"
+  az rest --method PATCH --url "$graph" --headers "Content-Type=application/json" --body "{
+    \"api\": {\"preAuthorizedApplications\": [{\"appId\": \"${AZURE_CLI_APP_ID}\",
+              \"delegatedPermissionIds\": [\"${SCOPE_WEB_USER}\"]}]}
+  }" >/dev/null 2>&1 && say "  Azure CLI pre-authorized for user_impersonation" \
+    || say "  WARN: could not pre-authorize the Azure CLI"
+
+  # The presenter signs in as themselves; give that account the Engineer and Approver roles.
+  # (The readonly persona is reached by "act as readonly" in the UI, which only narrows.)
+  local spId userId role
+  spId="$(az ad sp show --id "$appId" --query id -o tsv 2>/dev/null)"
+  userId="$(az ad signed-in-user show --query id -o tsv 2>/dev/null)"
+  if [ -n "$spId" ] && [ -n "$userId" ]; then
+    for role in "$ROLE_ENGINEER" "$ROLE_APPROVER"; do
+      if az rest --method GET --url "https://graph.microsoft.com/v1.0/servicePrincipals/${spId}/appRoleAssignedTo" \
+          --query "value[?principalId=='${userId}' && appRoleId=='${role}'] | length(@)" -o tsv 2>/dev/null | grep -q '^1$'; then
+        say "  operator already holds role ${role}"
+      else
+        az rest --method POST --url "https://graph.microsoft.com/v1.0/servicePrincipals/${spId}/appRoleAssignedTo" \
+          --headers "Content-Type=application/json" \
+          --body "{\"principalId\": \"${userId}\", \"resourceId\": \"${spId}\", \"appRoleId\": \"${role}\"}" \
+          >/dev/null 2>&1 && say "  operator assigned role ${role}" || say "  WARN: could not assign role ${role}"
+      fi
+    done
+  fi
+}
+
+if [ "$SHOW_ONLY" != "1" ] && [ -n "${WEB_APP_ID:-}" ]; then
+  configure_web_signin "$WEB_APP_ID"
+fi
+
+# ------------------------------------------------------------- atlas-ops-api scope (Phase 08) --
+# The ops API is protected by App Service authentication at the platform level. Two kinds of
+# caller need a token for it:
+#   - managed identities (APIM from Phase 09, the orchestrator and web app until then), which use
+#     the app-only `.default` scope and need nothing here;
+#   - a signed-in operator running verification, whose Azure CLI needs a delegated scope. The CLI
+#     is pre-authorized for exactly one, so `az account get-access-token --scope
+#     api://atlas-ops-api/ops.call` works without an interactive consent prompt.
+SCOPE_OPS_CALL="3f9c2a1e-7b4d-4c8e-9a51-2d6e8f0b1c73"
+
+# Phase 09 adds the same for atlas-gateway (`gateway.call`). The operator's delegated token for the
+# gateway carries NO Atlas.Agent role - that is governance proof 3 (a real identity, a real
+# subscription key, and still 403 because it is not an agent).
+SCOPE_GATEWAY_CALL="5d1e7f20-8a3c-4b6d-9e02-6c7a1f4b2d85"
+
+configure_delegated_scope() {
+  local appId="$1" scopeId="$2" value="$3" label="$4" objId graph
+  objId="$(az ad app show --id "$appId" --query id -o tsv 2>/dev/null)"
+  if [ -z "$objId" ]; then
+    say "  WARN: ${label} not found; skipping its scope"
+    return 0
+  fi
+  graph="https://graph.microsoft.com/v1.0/applications/${objId}"
+  az rest --method PATCH --url "$graph" --headers "Content-Type=application/json" --body "{
+    \"api\": {\"requestedAccessTokenVersion\": 2,
+             \"oauth2PermissionScopes\": [{\"id\": \"${scopeId}\", \"value\": \"${value}\",
+               \"type\": \"User\", \"isEnabled\": true,
+               \"adminConsentDisplayName\": \"Call ${label}\",
+               \"adminConsentDescription\": \"Call ${label} as the signed-in user\",
+               \"userConsentDisplayName\": \"Call ${label}\",
+               \"userConsentDescription\": \"Call ${label} as you\"}]}
+  }" >/dev/null 2>&1 && say "  ${label}: scope ${value}" \
+    || { say "  ERROR adding the ${value} scope"; return 1; }
+  sleep 3
+  az rest --method PATCH --url "$graph" --headers "Content-Type=application/json" --body "{
+    \"api\": {\"preAuthorizedApplications\": [{\"appId\": \"${AZURE_CLI_APP_ID}\",
+              \"delegatedPermissionIds\": [\"${scopeId}\"]}]}
+  }" >/dev/null 2>&1 && say "  ${label}: Azure CLI pre-authorized for ${value}" \
+    || say "  WARN: could not pre-authorize the Azure CLI for ${value}"
+}
+
+if [ "$SHOW_ONLY" != "1" ] && [ -n "${OPSAPI_APP_ID:-}" ]; then
+  configure_delegated_scope "$OPSAPI_APP_ID" "$SCOPE_OPS_CALL" "ops.call" "atlas-ops-api"
+fi
+if [ "$SHOW_ONLY" != "1" ] && [ -n "${GATEWAY_APP_ID:-}" ]; then
+  configure_delegated_scope "$GATEWAY_APP_ID" "$SCOPE_GATEWAY_CALL" "gateway.call" "atlas-gateway"
+fi
+
+echo
+echo "RESULT"
+echo "  atlas-web      ${WEB_APP_ID:-?}"
+echo "  atlas-gateway  ${GATEWAY_APP_ID:-?}   audience api://atlas-gateway"
+echo "  atlas-ops-api  ${OPSAPI_APP_ID:-?}   audience api://atlas-ops-api"
+
+if [ "$SHOW_ONLY" = "1" ]; then exit 0; fi
+
+# Persist into the azd environment so Phase 08 and Phase 09 read them rather than re-discovering.
+if [ -n "${WEB_APP_ID:-}" ];     then azd env set ATLAS_WEB_APP_CLIENT_ID "$WEB_APP_ID" >/dev/null 2>&1; fi
+if [ -n "${GATEWAY_APP_ID:-}" ]; then azd env set ATLAS_GATEWAY_APP_CLIENT_ID "$GATEWAY_APP_ID" >/dev/null 2>&1; fi
+if [ -n "${OPSAPI_APP_ID:-}" ];  then azd env set ATLAS_OPSAPI_APP_CLIENT_ID "$OPSAPI_APP_ID" >/dev/null 2>&1; fi
+echo
+echo "Written to the azd environment as ATLAS_*_APP_CLIENT_ID."
+echo
+echo "Atlas.Agent is assigned to the workload identities by scripts/assign_gateway_roles.sh"
+echo "(postprovision), once those identities exist. Still manual:"
+echo "  - assign Atlas.Approver to the demo approver account"
+echo "  - do NOT assign Atlas.Approver to the readonly persona; the Episode 4"
+echo "    unauthorized eval category depends on that being false"

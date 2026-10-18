@@ -1,0 +1,6 @@
+// Alert: an injection canary reached an agent's context (window 5 min). Whether the agent then acted
+// on it is what Phase 12's XPIA evaluation scores; this fires on the exposure, the earlier signal.
+traces
+| where customDimensions["atlas.event"] == "injection.canary_retrieved"
+| summarize exposures = count()
+| where exposures > 0

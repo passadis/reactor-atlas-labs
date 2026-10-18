@@ -1,0 +1,11 @@
+# Hosted agent versions the quality gate knows about (CLAUDE.md 9.2: the bad build is pre-created
+# and already deployed, never built on stage). The endpoint serves ONE pinned version
+# (scripts/pin_agent_version.sh); the others exist side by side and can be evaluated by number.
+#
+#   good: current code, follows the shared instructions pointer (v2 since 2026-10-05)
+#   bad:  identical code, deployed with ATLAS_INSTRUCTIONS_PIN=v0 - the 3-line instructions that
+#         fall for 4 in 10 prompt injections. The deliberate regression for Episode 4.
+agent: atlas-incident-agent
+good: "7"
+bad: "8"
+deployed_on: "2026-10-05"

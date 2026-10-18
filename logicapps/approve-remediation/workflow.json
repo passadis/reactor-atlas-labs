@@ -1,0 +1,186 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_an_approval_is_requested": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "method": "POST",
+          "schema": {
+            "type": "object",
+            "required": [
+              "case_id",
+              "plan_id"
+            ],
+            "properties": {
+              "case_id": {
+                "type": "string"
+              },
+              "plan_id": {
+                "type": "string"
+              },
+              "required_roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "expires_at": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "timeout": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "console_url": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "actions": {
+      "Accepted": {
+        "type": "Response",
+        "kind": "Http",
+        "runAfter": {},
+        "inputs": {
+          "statusCode": 202,
+          "headers": {
+            "x-ms-workflow-run-id": "@{workflow()?['run']?['name']}"
+          },
+          "body": {
+            "case_id": "@{triggerBody()?['case_id']}",
+            "run_id": "@{workflow()?['run']?['name']}",
+            "status": "waiting for a human"
+          }
+        }
+      },
+      "Notify_approvers": {
+        "type": "Compose",
+        "runAfter": {
+          "Accepted": [
+            "Succeeded"
+          ]
+        },
+        "inputs": {
+          "channel": "log only (no mail or Teams connector in this tenant)",
+          "to_roles": "@triggerBody()?['required_roles']",
+          "message": "@{concat('Approval needed for ', triggerBody()?['case_id'], ' plan ', triggerBody()?['plan_id'], ' before ', triggerBody()?['expires_at'], ': ', triggerBody()?['summary'])}"
+        }
+      },
+      "Post_console_link": {
+        "type": "Compose",
+        "runAfter": {
+          "Accepted": [
+            "Succeeded"
+          ]
+        },
+        "inputs": {
+          "console_url": "@triggerBody()?['console_url']",
+          "note": "A person decides in the ATLAS console; the orchestrator checks it. This workflow only collects the answer."
+        }
+      },
+      "Wait_for_decision": {
+        "type": "HttpWebhook",
+        "runAfter": {
+          "Notify_approvers": [
+            "Succeeded"
+          ],
+          "Post_console_link": [
+            "Succeeded"
+          ]
+        },
+        "inputs": {
+          "subscribe": {
+            "method": "POST",
+            "uri": "@parameters('webCallbackUrl')",
+            "body": {
+              "action": "subscribe",
+              "case_id": "@triggerBody()?['case_id']",
+              "plan_id": "@triggerBody()?['plan_id']",
+              "callback_url": "@listCallbackUrl()"
+            },
+            "authentication": {
+              "type": "ManagedServiceIdentity",
+              "identity": "@parameters('logicIdentityId')",
+              "audience": "@parameters('webAudience')"
+            }
+          },
+          "unsubscribe": {
+            "method": "POST",
+            "uri": "@parameters('webCallbackUrl')",
+            "body": {
+              "action": "unsubscribe",
+              "case_id": "@triggerBody()?['case_id']",
+              "plan_id": "@triggerBody()?['plan_id']"
+            },
+            "authentication": {
+              "type": "ManagedServiceIdentity",
+              "identity": "@parameters('logicIdentityId')",
+              "audience": "@parameters('webAudience')"
+            }
+          }
+        },
+        "limit": {
+          "timeout": "@{coalesce(triggerBody()?['timeout'], 'PT30M')}"
+        }
+      },
+      "Record_decision": {
+        "type": "Compose",
+        "runAfter": {
+          "Wait_for_decision": [
+            "Succeeded"
+          ]
+        },
+        "inputs": {
+          "decided_by_orchestrator": "@body('Wait_for_decision')"
+        }
+      },
+      "Expiry_requested": {
+        "type": "Terminate",
+        "runAfter": {
+          "Ask_orchestrator_to_expire": [
+            "Succeeded",
+            "Failed"
+          ]
+        },
+        "inputs": {
+          "runStatus": "Succeeded"
+        }
+      },
+      "Ask_orchestrator_to_expire": {
+        "type": "Http",
+        "runAfter": {
+          "Wait_for_decision": [
+            "TimedOut"
+          ]
+        },
+        "inputs": {
+          "method": "POST",
+          "uri": "@parameters('webCallbackUrl')",
+          "body": {
+            "action": "expired",
+            "case_id": "@triggerBody()?['case_id']",
+            "plan_id": "@triggerBody()?['plan_id']"
+          },
+          "authentication": {
+            "type": "ManagedServiceIdentity",
+            "identity": "@parameters('logicIdentityId')",
+            "audience": "@parameters('webAudience')"
+          }
+        }
+      }
+    },
+    "outputs": {}
+  },
+  "kind": "Stateful"
+}

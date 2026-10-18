@@ -1,0 +1,11 @@
+Recorded 2026-10-11 against the deployed ATLAS (eastus2, show profile). Fallback for runbook/EPISODE-3.md.
+
+$ make e2e-batch ONLY="approved rejected auto dead_letter"
+demo reset in 12.0 s
+PASS  approved     CASE-19138753      80 s  gate asked ['manager', 'director']; approve HTTP 200; ticket TKT-D01C2C1F3F; 9 steps succeeded; completed
+FAIL  rejected     CASE-58C23C8F      50 s  gate asked ['director']; reject HTTP 200; awaiting_approval; dispatched: False
+PASS  auto         CASE-BB91EB58      47 s  no human asked: True; auto-approved True; remediation succeeded
+PASS  dead_letter  CASE-RB00990514BA   55 s  OP-FF8DF6B30980: dead-lettered after 4 deliveries (step 2 failed 5 times) at 40 s; fixed and replayed; remediation succeeded
+
+e2e batch: 3/4 outcomes as designed in 231 s
+follow any case:  make trace-story CASE=<case id>   (telemetry lands 1-3 min later)

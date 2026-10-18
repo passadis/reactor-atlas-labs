@@ -111,7 +111,10 @@ prov_has() { # provider | resourceType
 }
 prov_has Microsoft.App managedEnvironments      && row PASS "Container Apps environments" "available" || row FAIL "Container Apps environments" "not available"
 prov_has Microsoft.ServiceBus namespaces        && row PASS "Service Bus (Premium at provision)" "available" || row FAIL "Service Bus" "not available"
-prov_has Microsoft.Search searchServices        && row PASS "AI Search" "available" || row FAIL "AI Search" "not available"
+# NOTE: this proves the service is OFFERED here, NOT that the region has capacity right now.
+# eastus2 passed this check on 2026-09-15 and then failed provisioning with
+# InsufficientResourcesAvailable for every Search SKU. Only a real create attempt proves capacity.
+prov_has Microsoft.Search searchServices        && row WARN "AI Search (offered, capacity unproven)" "see CLAUDE.md 7.14" || row FAIL "AI Search" "not available"
 prov_has Microsoft.DocumentDB databaseAccounts  && row PASS "Cosmos DB" "available" || row FAIL "Cosmos DB" "not available"
 prov_has Microsoft.ContainerRegistry registries && row PASS "Container Registry" "available" || row FAIL "Container Registry" "not available"
 

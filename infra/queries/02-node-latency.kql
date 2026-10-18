@@ -1,0 +1,8 @@
+// Section 1 - Latency per node: every agent and deterministic executor in the workflow, from the
+// atlas.node.<id> span each executor opens around its own work.
+dependencies
+| where name startswith "atlas.node."
+| extend node = substring(name, 11)
+| summarize calls = count(), p50_s = round(percentile(duration, 50) / 1000, 2),
+            p95_s = round(percentile(duration, 95) / 1000, 2) by node
+| order by p95_s desc

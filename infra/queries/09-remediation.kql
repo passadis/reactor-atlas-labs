@@ -1,0 +1,7 @@
+// Section 5 - Remediation: dispatched versus final outcome (succeeded, failed, dead_lettered).
+traces
+| where customDimensions["atlas.event"] in ("remediation.dispatched", "remediation.outcome")
+| extend stage = iff(tostring(customDimensions["atlas.event"]) == "remediation.dispatched",
+                     "dispatched", tostring(customDimensions["atlas.status"]))
+| summarize operations = count() by bin(timestamp, 1h), stage
+| order by timestamp asc

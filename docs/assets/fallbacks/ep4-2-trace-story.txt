@@ -1,0 +1,23 @@
+Recorded 2026-10-14 against the deployed ATLAS (eastus2, show profile). Fallback for runbook/EPISODE-4.md.
+
+$ make trace-story CASE=CASE-06EB9419
+CASE-06EB9419 - the whole journey is ONE trace (d58e6c3e563c8a8954ca7c6495f9c1b7), 306 spans, 6 components
+
+  t+   0.0s  REPORT                       the engineer's report enters through the web app (POST /cases)
+  t+   0.3s  INTAKE (code)                resolves the services named in the report - 0.1 s
+  t+   0.5s  TRIAGE (agent)               what is broken, how bad, what changed - 28.8 s, 3 model calls, tools: get_recent_changes x2, get_telemetry x2, lookup_service x2
+  t+  29.4s  KNOWLEDGE (agent) [parallel] which runbook and past incidents apply - 13.7 s, 3 model calls, tools: get_incident x2, search_knowledge x2
+  t+  29.4s  IMPACT (agent) [parallel]    what else this takes down - 8.8 s, 2 model calls, tools: get_telemetry x2, lookup_service x2, compute_blast_radius
+  t+  29.4s                               knowledge and impact ran side by side: 8.8 s saved over running them one after the other
+  t+  43.1s  AGGREGATE (code)             merges the three analyses by fixed rules (severity = max of triage and impact)
+  t+  43.2s  PLANNER (agent)              drafts the remediation plan - 16.2 s, 2 model calls, tools: search_knowledge x3, lookup_service x2
+  t+  59.5s  POLICY GATE (code)           approval required - director must approve. No model call: rules in policy.py
+  t+  59.7s  LOGIC APP                    approval workflow starts: notifies approvers, posts the console link, waits for the decision (and expires it after 30 min)
+  t+  60.2s  HUMAN                        APPROVED by a director, 0.6 s after the gate asked - checked against role, plan id and expiry before it counts
+  t+  60.4s  DISPATCH (code)              opens ticket TKT-DEE51A93FE, mints a single-use approval token, submits operation OP-DE8064CE1B8B through APIM
+  t+  60.9s  OPS API (Function)           checks the token is genuine and unspent, spends it, puts the command on Service Bus
+  t+  61.6s  WORKER                       takes the command off the queue, runs 8 steps one by one, publishes 17 progress events - 28.7 s
+  t+  90.3s  DONE                         remediation succeeded after 1 delivery attempt(s); the case is closed with its ticket and every step's result
+
+  components on this one trace: apim-atlas-mkruniv7, atlas-ops-api, atlas-orchestrator, atlas-web, atlas-worker, logic-atlas-mkruniv7
+  the full waterfall: make trace-check CASE=CASE-06EB9419

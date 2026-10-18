@@ -1,0 +1,39 @@
+# Roll the hosted agent back to a known version, then prove the system is healthy.
+# A pointer flip (CLAUDE.md 9.2), timed: it must finish in under 3 minutes - it runs on stage.
+name: rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Hosted agent version to roll back to (number, or good)"
+        required: true
+        default: good
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  rollback:
+    runs-on: ubuntu-24.04  # pinned: ubuntu-latest moves to Ubuntu 26 on 2026-10-19, mid-series
+    environment: atlas
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: astral-sh/setup-uv@v6
+      - env:
+          ATLAS_ENV_FILE: ${{ vars.ATLAS_ENV_FILE }}
+        run: |
+          uv python install 3.13
+          uv sync --python 3.13 --group dev --locked
+          echo "$ATLAS_ENV_FILE" >> "$GITHUB_ENV"
+      - name: Pin, then smoke, inside a 180 s budget
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: uv run python scripts/ci_rollback_step.py "$VERSION"

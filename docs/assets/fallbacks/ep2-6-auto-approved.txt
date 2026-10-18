@@ -1,0 +1,7 @@
+Recorded 2026-10-07 against the deployed ATLAS (eastus2, show profile). Fallback for runbook/EPISODE-2.md.
+
+reporting-ttl, Run in workflow:
+
+  policy gate: auto-approved - low risk, Tier 4, 2 reversible destructive step(s), each with a
+  rollback, blast radius 1, environment ['staging']
+  no approval panel; remediation succeeded on its own (about 30 s after the gate)

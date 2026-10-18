@@ -12,6 +12,8 @@ disagree, section 7 wins — it is backed by live API probes, not by assumptions
 
 ---
 
+## No Capability Masking
+
 ## 0. Prime directive: verify APIs, never recall them
 
 The Microsoft Foundry and Microsoft Agent Framework surfaces changed substantially through
@@ -348,6 +350,42 @@ more headroom is ever needed.
 `text-embedding-3-large` produces **3072-dimension** vectors. The pack never states this. Set it
 explicitly in the `idx-atlas-knowledge` index definition or you rebuild the index after seeding.
 
+### 7.14 Azure AI Search runs in `eastus`, not `eastus2`
+
+Discovered during the first `azd provision` on 2026-09-15. `eastus2` returned
+`InsufficientResourcesAvailable` for Azure AI Search. Probed directly afterwards: **every SKU
+fails**, `basic` as well as `standard`, so this is regional capacity exhaustion, not a tier or
+quota problem. Probe results that day:
+
+| Region | Search `standard` |
+|---|---|
+| `eastus2` | **out of capacity (all SKUs)** |
+| `eastus` | available |
+| `centralus` | available |
+| `swedencentral` | available |
+| `westus3` | `ResourcesForSkuUnavailable` |
+
+**Resolution: `searchLocation` defaults to `eastus`; everything else stays in `eastus2`.**
+
+Moving the whole footprint was the wrong trade. The only other region that can run the AI Red
+Teaming Agent is `northcentralus`, and its agent-tool matrix is weaker - no Computer Use and no
+Function tool. Keeping `eastus2` preserves red teaming and all 15 agent tools; only the search
+index moves.
+
+The cross-region hop is cheap and safe: the Foundry project connection is an endpoint plus Entra
+auth and works across regions, `eastus` and `eastus2` are the same geography, and the added latency
+on knowledge retrieval is tens of milliseconds against a 60-document index. Say it out loud on
+stage rather than hiding it - regional capacity is a real production constraint and handling it
+without moving the whole system is a better story than pretending it did not happen.
+
+Retry `eastus2` before Episode 1; if capacity returns, `azd env set ATLAS_SEARCH_LOCATION eastus2`
+and re-provision. Do not treat that as required.
+
+**Lesson for `scripts/check_region.sh`:** it reported AI Search as available in `eastus2` and was
+wrong. Provider-level region listings describe where a service is *offered*, not whether the region
+has capacity *right now*. Availability is not capacity. The script now says so; only a real create
+attempt proves capacity.
+
 ### 7.12 Descoped for time (agreed 2026-09-15)
 
 Cut deliberately, not forgotten. Each keeps its Episode beat via a cheaper path:
@@ -520,3 +558,5 @@ wall-clock in `docs/DEMO-NOTES.md`: `kill_orchestrator.sh` (ACA scale 0 then 2),
 `chaos/model_throttle.sh` (APIM policy propagation), and the tool-list cache refresh after
 `inject_bad_tool_description.py` (the pack says up to 60 s). These are the beats most likely to
 overrun their slot.
+
+

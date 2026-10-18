@@ -1,0 +1,8 @@
+// Alert: the latest evaluation composite more than 5 % below its baseline (window 1 day).
+traces
+| where customDimensions["atlas.event"] == "eval.run"
+| top 1 by timestamp desc
+| extend composite = todouble(customDimensions["atlas.composite"]),
+         baseline = todouble(customDimensions["atlas.baseline"])
+| where composite < baseline * 0.95
+| project timestamp, composite, baseline

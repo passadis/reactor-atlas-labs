@@ -1,0 +1,14 @@
+Recorded 2026-10-07 against the deployed ATLAS (eastus2, show profile). Fallback for runbook/EPISODE-2.md.
+
+$ make checkpoints CASE=CASE-71F0314E
+
+atlas-incident-graph: 8 checkpoint(s) for CASE-71F0314E
+  iter  checkpoint    parent    graph         timestamp                   pending
+     0  84ff8899-1ee            0f5d1a902114  2026-10-07T19:16:36.095583  -
+     1  d154071f-f89  84ff8899  0f5d1a902114  2026-10-07T19:16:43.389397  -
+     2  763d1f4f-4e2  d154071f  0f5d1a902114  2026-10-07T19:18:13.451371  -
+     3  aa282197-b62  763d1f4f  0f5d1a902114  2026-10-07T19:19:14.437812  -
+     4  c461e248-3d0  aa282197  0f5d1a902114  2026-10-07T19:19:14.586177  -
+     5  10475f1f-53c  c461e248  0f5d1a902114  2026-10-07T19:19:34.405330  -
+     6  1496ad31-3f1  10475f1f  0f5d1a902114  2026-10-07T19:19:34.498809  -
+     7  1c10fb61-5bf  1496ad31  0f5d1a902114  2026-10-07T19:19:34.644554  approval:CASE-71F0314E <- PARKED ON A HUMAN

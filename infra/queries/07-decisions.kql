@@ -1,0 +1,10 @@
+// Section 4 - Decisions: what the policy gate decided, and what humans did with the rest.
+traces
+| where customDimensions["atlas.event"] in ("policy.decision", "approval.answered", "approval.expired")
+| extend event = tostring(customDimensions["atlas.event"])
+| extend outcome = case(event == "policy.decision", strcat("gate: ", tostring(customDimensions["atlas.decision"])),
+                        event == "approval.expired", "human: expired",
+                        tostring(customDimensions["atlas.approved"]) =~ "true", "human: approved",
+                        "human: rejected")
+| summarize count() by bin(timestamp, 1h), outcome
+| order by timestamp asc

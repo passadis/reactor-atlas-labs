@@ -1,0 +1,702 @@
+openapi: 3.0.3
+info:
+  title: ATLAS Operations API
+  version: 1.0.0
+  description: |
+    The Contoso Cloud Operations business API. It is the only way ATLAS reads operational data
+    or changes anything, and it is written for two readers at once: engineers, and the language
+    model that decides which operation to call.
+
+    Written by hand, deliberately. Every `description` below is prompt engineering: it says what an
+    operation is for, when to use it, and - just as important - when NOT to. Phase 09 imports this
+    file into API Management and exposes it to agents as tools, so the model sees these words
+    verbatim.
+
+    Conventions that hold for every operation:
+
+    - Identifiers are exact. Services are `svc-...`, incidents `INC-YYYY-NNNN`, changes
+      `CHG-YYYY-NNNN`, tickets `TKT-...`. Never invent one; look it up.
+    - Times are UTC, ISO 8601, and relative windows are measured back from the operations clock,
+      not the wall clock, so the same question gives the same answer.
+    - Errors are always the `Error` envelope, never a stack trace. `correlation_id` matches the
+      `x-atlas-correlation-id` response header and the distributed trace.
+    - Both write operations are idempotent on the `Idempotency-Key` header. A replay returns the
+      original result with status 200 and `Idempotency-Replayed: true`.
+servers:
+  - url: https://func-atlas-api.azurewebsites.net/api
+    description: Direct, for verification only. Callers go through API Management from Phase 09.
+security:
+  - entra: []
+tags:
+  - name: catalogue
+    description: The service catalogue (CMDB) and its dependency graph.
+  - name: telemetry
+    description: Measured service health.
+  - name: history
+    description: Past incidents and recent changes.
+  - name: tickets
+    description: Operations tickets. Writes.
+  - name: remediation
+    description: Approved remediation, executed asynchronously. Writes.
+  - name: platform
+    description: Liveness.
+
+paths:
+  /services:
+    get:
+      operationId: listServices
+      tags: [catalogue]
+      summary: List the whole service catalogue.
+      description: |
+        Returns every service in the catalogue, each as a full record. The catalogue is small (a
+        few dozen services) and changes rarely, so callers read it once and keep it.
+
+        Use this to resolve a service a report names loosely ("payments", "the checkout thing")
+        to its exact id, or to suggest the closest ids when a lookup misses. Do NOT use it when you
+        already have an exact id - `getService` is one small read. Do NOT use it to work out who is
+        affected by a failure; `getBlastRadius` walks the graph for you and never guesses.
+      responses:
+        '200':
+          description: The catalogue.
+          headers:
+            x-atlas-correlation-id: {$ref: '#/components/headers/CorrelationId'}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [services]
+                properties:
+                  services:
+                    type: array
+                    items: {$ref: '#/components/schemas/Service'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+
+  /services/{service_id}:
+    get:
+      operationId: getService
+      tags: [catalogue]
+      summary: Get one service's catalogue record.
+      description: |
+        Returns the CMDB record for one service: tier, owner team, on-call rotation, environment,
+        SLO, the services it depends on, its runbook ids, and whether it is under a change freeze.
+
+        Use this when you already know the exact service id and need its tier, owner, SLO or
+        freeze status. Do NOT use it to search for a service by description or by a partial name -
+        it needs the exact id, and a guess returns 404. Do NOT use it to work out who else is
+        affected; use `getBlastRadius`, which walks the dependency graph for you.
+      parameters:
+        - $ref: '#/components/parameters/ServiceId'
+      responses:
+        '200':
+          description: The service.
+          headers:
+            x-atlas-correlation-id: {$ref: '#/components/headers/CorrelationId'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Service'}
+              example:
+                service_id: svc-payments
+                name: Payments
+                tier: 1
+                owner_team: team-payments
+                on_call_rotation: rota-payments
+                environment: prod
+                region: [westeurope, northeurope]
+                depends_on: [svc-ledger, svc-fraud]
+                slo: {availability_target: 0.999, latency_p95_ms: 250, error_budget_minutes_month: 43}
+                runbook_ids: [RB-0060]
+                change_freeze: true
+                repository: contoso/payments
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+
+  /services/{service_id}/health:
+    get:
+      operationId: getServiceHealth
+      tags: [telemetry]
+      summary: Get a service's measured health over a recent window.
+      description: |
+        Returns measured telemetry for one service over the last `window_minutes` (default 60)
+        before the operations clock: peak p95 latency against the SLO, peak error rate, SLO burn
+        rate, and whether an anomaly was detected, plus the per-window series behind those peaks.
+
+        Use this to confirm a symptom and its onset from measurements rather than from the report.
+        Do NOT use it to find what changed - use `listChanges`. An empty `windows` list means no
+        telemetry was recorded, which is not the same as healthy: say that it is unmeasured.
+      parameters:
+        - $ref: '#/components/parameters/ServiceId'
+        - name: window_minutes
+          in: query
+          required: false
+          description: How far back to look, in minutes. Default 60, maximum 1440.
+          schema: {type: integer, minimum: 5, maximum: 1440, default: 60}
+      responses:
+        '200':
+          description: The health summary.
+          headers:
+            x-atlas-correlation-id: {$ref: '#/components/headers/CorrelationId'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ServiceHealth'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+
+  /services/{service_id}/blast-radius:
+    get:
+      operationId: getBlastRadius
+      tags: [catalogue]
+      summary: Compute which services are affected if this one fails.
+      description: |
+        Walks the dependency graph outward from one service, up to `depth` hops, and returns every
+        service that depends on it directly or transitively, the Tier 1 services among them, and
+        the paths that reach each one.
+
+        This is an exact, deterministic graph walk. Its number IS the blast radius - never estimate
+        one yourself and never adjust the answer. Use it before assessing customer impact. Do NOT
+        use it to find what a service depends on; that is `depends_on` in `getService`.
+      parameters:
+        - $ref: '#/components/parameters/ServiceId'
+        - name: depth
+          in: query
+          required: false
+          description: Maximum number of dependency hops to follow. Default 3.
+          schema: {type: integer, minimum: 1, maximum: 6, default: 3}
+      responses:
+        '200':
+          description: The blast radius.
+          headers:
+            x-atlas-correlation-id: {$ref: '#/components/headers/CorrelationId'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BlastRadius'}
+              example:
+                service_id: svc-payments
+                depth: 3
+                affected_service_ids: [svc-checkout-api, svc-orders, svc-loyalty]
+                affected_count: 3
+                tier1_affected: [svc-checkout-api]
+                max_depth_reached: 2
+                paths: [[svc-payments, svc-checkout-api], [svc-payments, svc-checkout-api, svc-orders]]
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+
+  /incidents/{incident_id}:
+    get:
+      operationId: getIncident
+      tags: [history]
+      summary: Get one past incident by its exact id.
+      description: |
+        Returns a past incident: when it happened, severity, category, affected services, root
+        cause, resolution, how long it took to detect and mitigate, and the changes linked to it.
+
+        Use this to confirm what a cited incident actually says before relying on it. Do NOT use it
+        to search for similar incidents - it needs an exact `INC-` id. Searching by symptom is a
+        knowledge search, which is a separate tool.
+      parameters:
+        - name: incident_id
+          in: path
+          required: true
+          description: Exact incident id, for example INC-2026-0297.
+          schema: {type: string, pattern: '^INC-\d{4}-\d{4}$'}
+          example: INC-2026-0297
+      responses:
+        '200':
+          description: The incident.
+          headers:
+            x-atlas-correlation-id: {$ref: '#/components/headers/CorrelationId'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Incident'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+
+  /changes:
+    get:
+      operationId: listChanges
+      tags: [history]
+      summary: List recent deployments and changes to one service.
+      description: |
+        Returns changes deployed to one service in the `since_minutes` before the operations clock,
+        newest first, each with its risk rating, author, commit and whether a rollback is
+        available.
+
+        Use this to find what changed just before a symptom began - a deployment shortly before
+        onset is the strongest single signal there is. Check the affected service AND the services
+        it depends on. Do NOT use it without a `service_id`; there is no cross-service listing.
+      parameters:
+        - name: service_id
+          in: query
+          required: true
+          description: Exact service id.
+          schema: {type: string, pattern: '^svc-[a-z0-9-]+$'}
+          example: svc-payments
+        - name: since_minutes
+          in: query
+          required: false
+          description: How far back to look, in minutes. Default 240, maximum 10080.
+          schema: {type: integer, minimum: 1, maximum: 10080, default: 240}
+      responses:
+        '200':
+          description: The changes, newest first. An empty list means nothing was deployed.
+          headers:
+            x-atlas-correlation-id: {$ref: '#/components/headers/CorrelationId'}
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [service_id, since_minutes, changes]
+                properties:
+                  service_id: {type: string}
+                  since_minutes: {type: integer}
+                  changes:
+                    type: array
+                    items: {$ref: '#/components/schemas/Change'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+
+  /tickets:
+    post:
+      operationId: createTicket
+      tags: [tickets]
+      summary: Open an operations ticket for a case.
+      description: |
+        Creates an operations ticket and returns its id. Idempotent on `Idempotency-Key`: sending
+        the same key again returns the original ticket with status 200 and
+        `Idempotency-Replayed: true`, and never opens a second one. Use the case id as the key.
+
+        Use this once per case, when the analysis is done and a human needs something to track.
+        Do NOT use it to record progress on an existing ticket, and do NOT open one per step of a
+        plan.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TicketRequest'}
+            example:
+              case_id: CASE-8BDA4940
+              severity: Sev2
+              summary: Checkout timing out for 20% of EU customers after the payments deploy.
+              service_ids: [svc-checkout-api, svc-payments]
+      responses:
+        '201':
+          description: The ticket was created.
+          headers:
+            x-atlas-correlation-id: {$ref: '#/components/headers/CorrelationId'}
+            Location: {$ref: '#/components/headers/Location'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Ticket'}
+        '200':
+          description: A replay of an earlier request with the same `Idempotency-Key`.
+          headers:
+            x-atlas-correlation-id: {$ref: '#/components/headers/CorrelationId'}
+            Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Ticket'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+
+  /tickets/{ticket_id}:
+    get:
+      operationId: getTicket
+      tags: [tickets]
+      summary: Get one ticket's current state.
+      description: |
+        Returns a ticket by its exact id. Use it to report a ticket's status back to a human. Do
+        NOT use it to find a ticket for a case - the ticket id is returned by `createTicket`.
+      parameters:
+        - name: ticket_id
+          in: path
+          required: true
+          description: Exact ticket id, as returned by createTicket.
+          schema: {type: string, pattern: '^TKT-[A-Z0-9]+$'}
+      responses:
+        '200':
+          description: The ticket.
+          headers:
+            x-atlas-correlation-id: {$ref: '#/components/headers/CorrelationId'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Ticket'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+
+  /remediation/commands:
+    post:
+      operationId: submitRemediation
+      tags: [remediation]
+      summary: Submit an APPROVED remediation plan for asynchronous execution.
+      description: |
+        Queues an approved plan for execution and returns immediately with `202 Accepted`, an
+        `operation_id`, and a `Location` to poll with `getRemediationOperation`. Execution is
+        asynchronous and may take minutes.
+
+        This operation changes production. It requires `approval_token`: a single-use token minted
+        by the orchestrator only after a human with the right role approved THIS plan. It is
+        validated server side against the approval record - case, plan id, approver role, expiry
+        and single use. There is no way to obtain one yourself. If you do not have a token, you do
+        not have approval: stop and ask for one. Never invent, reuse or modify a token.
+
+        Idempotent on `Idempotency-Key` (use the plan id): a replay returns the original operation
+        with status 200 and `Idempotency-Replayed: true`, and never executes twice.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RemediationCommand'}
+      responses:
+        '202':
+          description: Accepted for execution.
+          headers:
+            x-atlas-correlation-id: {$ref: '#/components/headers/CorrelationId'}
+            Location: {$ref: '#/components/headers/Location'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RemediationOperation'}
+        '200':
+          description: A replay of an earlier submission with the same `Idempotency-Key`.
+          headers:
+            x-atlas-correlation-id: {$ref: '#/components/headers/CorrelationId'}
+            Idempotency-Replayed: {$ref: '#/components/headers/IdempotencyReplayed'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RemediationOperation'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403':
+          description: |
+            The approval token is missing, forged, expired, already used, or for a different
+            case or plan. The attempt is audited. Do not retry with a different token.
+          headers:
+            x-atlas-correlation-id: {$ref: '#/components/headers/CorrelationId'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example:
+                code: approval_invalid
+                message: The approval token is not valid for this plan.
+                correlation_id: 4bf92f3577b34da6a3ce929d0e0e4736
+        '503': {$ref: '#/components/responses/Unavailable'}
+
+  /remediation/operations/{operation_id}:
+    get:
+      operationId: getRemediationOperation
+      tags: [remediation]
+      summary: Poll an asynchronous remediation.
+      description: |
+        Returns the state of a submitted remediation: queued, running, succeeded or failed, with
+        the steps completed so far. Poll it after `submitRemediation`, no more than once every few
+        seconds. Do NOT use it to submit anything.
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          description: The id returned by submitRemediation.
+          schema: {type: string, pattern: '^OP-[A-Za-z0-9]+$'}
+      responses:
+        '200':
+          description: The operation.
+          headers:
+            x-atlas-correlation-id: {$ref: '#/components/headers/CorrelationId'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RemediationOperation'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+
+  /health:
+    get:
+      operationId: getHealth
+      tags: [platform]
+      summary: Liveness of the operations API itself.
+      description: Platform liveness. Not a tool; never call it to check a Contoso service.
+      security: []
+      responses:
+        '200':
+          description: Alive.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: {type: string, enum: [ok]}
+                  version: {type: string}
+
+components:
+  securitySchemes:
+    entra:
+      type: oauth2
+      description: |
+        Microsoft Entra ID, enforced by the platform before any code runs. The token audience must
+        be `api://atlas-ops-api`. API Management presents a managed-identity token.
+      flows:
+        clientCredentials:
+          tokenUrl: https://login.microsoftonline.com/common/oauth2/v2.0/token
+          scopes:
+            api://atlas-ops-api/.default: Call the operations API.
+
+  parameters:
+    ServiceId:
+      name: service_id
+      in: path
+      required: true
+      description: Exact service id from the catalogue, for example svc-payments.
+      schema: {type: string, pattern: '^svc-[a-z0-9-]+$'}
+      example: svc-payments
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        A key that identifies this request across retries. Use the case id for tickets and the
+        plan id for remediation. The same key always returns the same result.
+      schema: {type: string, minLength: 6, maxLength: 128, pattern: '^[A-Za-z0-9:_-]+$'}
+
+  headers:
+    CorrelationId:
+      description: Correlates this response with the distributed trace and the error envelope.
+      schema: {type: string}
+    Location:
+      description: Where to read or poll the created resource.
+      schema: {type: string}
+    IdempotencyReplayed:
+      description: Present and `true` when this response replays an earlier request.
+      schema: {type: string, enum: ['true']}
+
+  responses:
+    BadRequest:
+      description: The request did not match the schema. `message` says which field.
+      headers:
+        x-atlas-correlation-id: {$ref: '#/components/headers/CorrelationId'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {code: invalid_request, message: 'depth must be between 1 and 6', correlation_id: 4bf92f35}
+    Unauthorized:
+      description: No valid Entra token for this API. Rejected by the platform.
+    NotFound:
+      description: No record with that exact id. Do not retry with a guessed id; look it up.
+      headers:
+        x-atlas-correlation-id: {$ref: '#/components/headers/CorrelationId'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+          example: {code: not_found, message: 'no service svc-paymnts', correlation_id: 4bf92f35}
+    Conflict:
+      description: The same `Idempotency-Key` was reused with a different request body.
+      headers:
+        x-atlas-correlation-id: {$ref: '#/components/headers/CorrelationId'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+    Unavailable:
+      description: A backing store did not answer in time. Safe to retry after a short pause.
+      headers:
+        x-atlas-correlation-id: {$ref: '#/components/headers/CorrelationId'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+
+  schemas:
+    Error:
+      type: object
+      description: Every error, always this shape. Never a stack trace or an internal detail.
+      required: [code, message, correlation_id]
+      properties:
+        code:
+          type: string
+          enum: [invalid_request, not_found, conflict, approval_invalid, unavailable, internal]
+        message: {type: string}
+        correlation_id: {type: string}
+
+    SLO:
+      type: object
+      required: [availability_target, latency_p95_ms, error_budget_minutes_month]
+      properties:
+        availability_target: {type: number, minimum: 0, maximum: 1, example: 0.999}
+        latency_p95_ms: {type: integer, minimum: 1, example: 250}
+        error_budget_minutes_month: {type: integer, minimum: 0, example: 43}
+
+    Service:
+      type: object
+      required: [service_id, name, tier, owner_team, on_call_rotation, environment, region,
+                 depends_on, slo, runbook_ids, change_freeze, repository]
+      properties:
+        service_id: {type: string}
+        name: {type: string}
+        tier: {type: integer, enum: [1, 2, 3, 4], description: 1 is the most critical.}
+        owner_team: {type: string}
+        on_call_rotation: {type: string}
+        environment: {type: string, enum: [prod, staging]}
+        region: {type: array, items: {type: string}}
+        depends_on:
+          type: array
+          items: {type: string}
+          description: Services this one calls. The reverse direction is getBlastRadius.
+        slo: {$ref: '#/components/schemas/SLO'}
+        runbook_ids: {type: array, items: {type: string}}
+        change_freeze:
+          type: boolean
+          description: True means destructive changes need break-glass approval.
+        repository: {type: string}
+
+    TelemetryWindow:
+      type: object
+      required: [window_start, window_minutes, error_rate_pct, p95_ms, slo_burn_rate, anomaly]
+      properties:
+        window_start: {type: string, format: date-time}
+        window_minutes: {type: integer}
+        request_rate_rpm: {type: number}
+        error_rate_pct: {type: number}
+        p50_ms: {type: number}
+        p95_ms: {type: number}
+        p99_ms: {type: number}
+        saturation_pct: {type: number}
+        slo_burn_rate: {type: number}
+        anomaly: {type: boolean}
+
+    ServiceHealth:
+      type: object
+      required: [service_id, window_minutes, measured, windows]
+      properties:
+        service_id: {type: string}
+        window_minutes: {type: integer}
+        measured:
+          type: boolean
+          description: False when no telemetry was recorded. Unmeasured is not the same as healthy.
+        slo_p95_ms: {type: integer, nullable: true}
+        peak_p95_ms: {type: number, nullable: true}
+        peak_error_rate_pct: {type: number, nullable: true}
+        peak_slo_burn_rate: {type: number, nullable: true}
+        anomaly_onset: {type: string, format: date-time, nullable: true}
+        windows:
+          type: array
+          items: {$ref: '#/components/schemas/TelemetryWindow'}
+
+    BlastRadius:
+      type: object
+      required: [service_id, depth, affected_service_ids, affected_count, tier1_affected,
+                 max_depth_reached, paths]
+      properties:
+        service_id: {type: string}
+        depth: {type: integer}
+        affected_service_ids: {type: array, items: {type: string}}
+        affected_count: {type: integer}
+        tier1_affected: {type: array, items: {type: string}}
+        max_depth_reached: {type: integer}
+        paths:
+          type: array
+          items: {type: array, items: {type: string}}
+
+    Incident:
+      type: object
+      required: [incident_id, opened_at, severity, category, title, description, affected_services]
+      properties:
+        incident_id: {type: string}
+        opened_at: {type: string, format: date-time}
+        closed_at: {type: string, format: date-time, nullable: true}
+        severity: {type: string, enum: [Sev1, Sev2, Sev3, Sev4]}
+        category:
+          type: string
+          enum: [latency, availability, data, security, capacity, deployment, config]
+        title: {type: string}
+        description: {type: string}
+        affected_services: {type: array, items: {type: string}}
+        root_cause: {type: string, nullable: true}
+        resolution: {type: string, nullable: true}
+        resolved_by: {type: string}
+        time_to_detect_minutes: {type: integer}
+        time_to_mitigate_minutes: {type: integer}
+        linked_change_ids: {type: array, items: {type: string}}
+        postmortem_url: {type: string, nullable: true}
+        tags: {type: array, items: {type: string}}
+
+    Change:
+      type: object
+      required: [change_id, service_id, deployed_at, author, summary, risk, rollback_available,
+                 commit_sha, status]
+      properties:
+        change_id: {type: string}
+        service_id: {type: string}
+        deployed_at: {type: string, format: date-time}
+        author: {type: string}
+        summary: {type: string}
+        risk: {type: string, enum: [low, medium, high]}
+        rollback_available: {type: boolean}
+        commit_sha: {type: string}
+        status: {type: string, enum: [succeeded, rolled_back, partial]}
+
+    TicketRequest:
+      type: object
+      additionalProperties: false
+      required: [case_id, severity, summary]
+      properties:
+        case_id: {type: string, pattern: '^CASE-[A-Z0-9]+$'}
+        severity: {type: string, enum: [Sev1, Sev2, Sev3, Sev4]}
+        summary: {type: string, minLength: 8, maxLength: 500}
+        service_ids:
+          type: array
+          maxItems: 25
+          items: {type: string, pattern: '^svc-[a-z0-9-]+$'}
+
+    Ticket:
+      type: object
+      required: [ticket_id, case_id, severity, summary, status, created_at]
+      properties:
+        ticket_id: {type: string}
+        case_id: {type: string}
+        severity: {type: string, enum: [Sev1, Sev2, Sev3, Sev4]}
+        summary: {type: string}
+        service_ids: {type: array, items: {type: string}}
+        status: {type: string, enum: [open, in_progress, resolved, closed]}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+
+    RemediationCommand:
+      type: object
+      additionalProperties: false
+      required: [case_id, plan_id, approval_token]
+      properties:
+        case_id: {type: string, pattern: '^CASE-[A-Z0-9]+$'}
+        plan_id: {type: string, pattern: '^[a-f0-9]{16}$'}
+        approval_token:
+          type: string
+          minLength: 20
+          maxLength: 2048
+          description: Minted by the orchestrator after a human approves. Single use. Never invent one.
+
+    RemediationOperation:
+      type: object
+      required: [operation_id, case_id, plan_id, status, submitted_at]
+      properties:
+        operation_id: {type: string}
+        case_id: {type: string}
+        plan_id: {type: string}
+        status: {type: string, enum: [queued, running, succeeded, failed]}
+        steps_completed: {type: integer, minimum: 0}
+        steps_total: {type: integer, minimum: 0}
+        detail: {type: string}
+        submitted_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
